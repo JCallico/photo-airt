@@ -1,0 +1,808 @@
+//! Application state, background workers and the message pump.
+//! Drawing lives in `ui_canvas.rs` (the stage) and `ui_panels.rs` (chrome).
+
+use std::path::PathBuf;
+use std::sync::atomic::Ordering;
+use std::sync::mpsc::{Receiver, Sender, channel};
+use std::sync::{Arc, atomic::AtomicBool, atomic::AtomicU32};
+
+use egui::{ColorImage, TextureHandle, TextureOptions, Vec2};
+
+use crate::ai::{self, AiEvent, AiHub, AiOutput, CliStatus, DirectorReport, Engine, Job, Placard, Prefs, Role, RoleCfg};
+use crate::finish::Finish;
+use crate::imaging::Img;
+use crate::photo_io;
+use crate::styles::{Ctx, Params, STYLES};
+
+pub const THUMB_LONG: usize = 420;
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum View {
+    Split,
+    SideBySide,
+    Single,
+    Gallery,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum LeftTab {
+    Algorithms,
+    AiStudio,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Kind {
+    Algorithm,
+    Ai(Engine),
+}
+
+pub struct Photo {
+    pub path: PathBuf,
+    pub name: String,
+    pub work: Arc<Img>,
+    pub thumb: Arc<Img>,
+    pub tex: TextureHandle,
+    pub orig_size: [u32; 2],
+}
+
+pub struct Artwork {
+    pub id: u64,
+    pub title: String,
+    pub subtitle: String,
+    pub kind: Kind,
+    pub base: Arc<Img>,
+    pub finish: Finish,
+    pub display: Arc<Img>,
+    pub tex: TextureHandle,
+    pub pinned: bool,
+    pub placard: Option<Placard>,
+    pub recipe: Option<(usize, Params, u64)>,
+    pub prompt: Option<String>,
+    pub saved: Option<PathBuf>,
+    pub finish_gen: u64,
+}
+
+pub struct RenderJob {
+    pub id: u64,
+    pub style: usize,
+    pub progress: Arc<AtomicU32>,
+    pub cancel: Arc<AtomicBool>,
+}
+
+pub struct Toast {
+    pub text: String,
+    pub color: egui::Color32,
+    pub born: f64,
+}
+
+pub struct Reveal {
+    pub artwork: u64,
+    pub prev: Option<TextureHandle>,
+    pub start: f64,
+}
+
+pub struct Director {
+    pub report: DirectorReport,
+    pub thumbs: Vec<Option<TextureHandle>>,
+    pub generation: u64,
+}
+
+pub enum WorkerMsg {
+    PhotoLoaded(Result<(PathBuf, Img, Img, ColorImage, [u32; 2]), String>),
+    Thumb { generation: u64, idx: usize, img: ColorImage },
+    RecipeThumb { generation: u64, idx: usize, img: ColorImage },
+    Rendered { job: u64, style: usize, params: Params, seed: u64, base: Arc<Img>, display: Arc<Img>, color: ColorImage },
+    Finished { artwork: u64, generation: u64, display: Arc<Img>, color: ColorImage },
+    Exported(Result<PathBuf, String>),
+    FilePicked(Option<PathBuf>),
+}
+
+pub struct App {
+    pub ctx: egui::Context,
+    pub photo: Option<Photo>,
+    pub loading: Option<String>,
+    pub artworks: Vec<Artwork>,
+    pub selected: Option<u64>,
+    pub view: View,
+    pub split: f32,
+    pub zoom: f32,
+    pub pan: Vec2,
+    pub dragging_split: bool,
+    pub left_tab: LeftTab,
+    pub style_idx: usize,
+    pub params: Vec<Params>,
+    pub seed: u64,
+    pub next_finish: Option<Finish>,
+    pub render: Option<RenderJob>,
+    pub render_due: Option<f64>,
+    pub thumbs: Vec<Option<TextureHandle>>,
+    pub thumb_gen: u64,
+    pub tx: Sender<WorkerMsg>,
+    rx: Receiver<WorkerMsg>,
+    pub hub: AiHub,
+    ai_rx: Receiver<AiEvent>,
+    cli_rx: Option<Receiver<(CliStatus, CliStatus)>>,
+    pub claude: Option<CliStatus>,
+    pub codex: Option<CliStatus>,
+    pub jobs: Vec<Job>,
+    pub director: Option<Director>,
+    pub paint_preset: usize,
+    pub paint_brief: String,
+    pub duet: bool,
+    /// Who plays each AI role right now (None = no capable CLI installed).
+    pub director_role: Option<RoleCfg>,
+    pub painter_role: Option<RoleCfg>,
+    pub prefs: Prefs,
+    pub vector_style: usize,
+    pub toasts: Vec<Toast>,
+    pub reveal: Option<Reveal>,
+    pub next_id: u64,
+    pub exporting: bool,
+    pub picking: bool,
+    pub work_res: usize,
+    pub pending_finish_for_render: Option<(u64, Finish)>,
+    pub recipe_title: Option<String>,
+}
+
+/// Scale to cover `w`×`h` and centre-crop, so AI results never get stretched.
+fn cover_to(src: &Img, w: usize, h: usize) -> Img {
+    let s = (w as f32 / src.w as f32).max(h as f32 / src.h as f32);
+    let (sw, sh) = (((src.w as f32 * s).ceil() as usize).max(w), ((src.h as f32 * s).ceil() as usize).max(h));
+    let scaled = src.resize_exact(sw, sh, image::imageops::FilterType::Lanczos3);
+    let (ox, oy) = ((sw - w) / 2, (sh - h) / 2);
+    Img { w, h, px: (0..w * h).map(|i| scaled.at(ox + i % w, oy + i / w)).collect() }
+}
+
+pub fn color_image(img: &Img) -> ColorImage {
+    ColorImage::from_rgba_unmultiplied([img.w, img.h], &img.to_rgba8_bytes())
+}
+
+impl App {
+    pub fn new(cc: &eframe::CreationContext<'_>, initial: Option<PathBuf>) -> Self {
+        crate::theme::install(&cc.egui_ctx);
+        let (tx, rx) = channel();
+        let (ai_tx, ai_rx) = channel();
+        let ctx = cc.egui_ctx.clone();
+        let mut app = Self {
+            hub: AiHub::new(ai_tx, ctx.clone()),
+            ctx,
+            photo: None,
+            loading: None,
+            artworks: vec![],
+            selected: None,
+            view: View::Split,
+            split: 0.5,
+            zoom: 1.0,
+            pan: Vec2::ZERO,
+            dragging_split: false,
+            left_tab: LeftTab::Algorithms,
+            style_idx: 0,
+            params: STYLES.iter().map(Params::defaults).collect(),
+            seed: 7,
+            next_finish: None,
+            render: None,
+            render_due: None,
+            thumbs: vec![None; STYLES.len()],
+            thumb_gen: 0,
+            tx,
+            rx,
+            ai_rx,
+            cli_rx: None,
+            claude: None,
+            codex: None,
+            jobs: vec![],
+            director: None,
+            paint_preset: 0,
+            paint_brief: ai::PAINT_PRESETS[0].prompt.to_string(),
+            duet: false,
+            director_role: None,
+            painter_role: None,
+            prefs: Prefs::load(),
+            vector_style: 0,
+            toasts: vec![],
+            reveal: None,
+            next_id: 1,
+            exporting: false,
+            picking: false,
+            work_res: 2048,
+            pending_finish_for_render: None,
+            recipe_title: None,
+        };
+        app.rescan_clis();
+        if let Some(p) = initial {
+            app.load_photo(p);
+        }
+        app
+    }
+
+    pub fn now(&self) -> f64 {
+        self.ctx.input(|i| i.time)
+    }
+
+    pub fn toast(&mut self, text: impl Into<String>, color: egui::Color32) {
+        let born = self.now();
+        self.toasts.push(Toast { text: text.into(), color, born });
+    }
+
+    pub fn selected_artwork(&self) -> Option<&Artwork> {
+        self.selected.and_then(|id| self.artworks.iter().find(|a| a.id == id))
+    }
+
+    pub fn selected_artwork_mut(&mut self) -> Option<&mut Artwork> {
+        let id = self.selected?;
+        self.artworks.iter_mut().find(|a| a.id == id)
+    }
+
+    // ------------------------------------------------------------ photo
+
+    pub fn pick_file(&mut self) {
+        if self.picking {
+            return;
+        }
+        self.picking = true;
+        let tx = self.tx.clone();
+        let ctx = self.ctx.clone();
+        std::thread::spawn(move || {
+            let p = rfd::FileDialog::new()
+                .set_title("Open a photo")
+                .add_filter("Images", &["jpg", "jpeg", "png", "webp", "tif", "tiff", "bmp", "heic", "heif", "avif"])
+                .pick_file();
+            let _ = tx.send(WorkerMsg::FilePicked(p));
+            ctx.request_repaint();
+        });
+    }
+
+    pub fn load_photo(&mut self, path: PathBuf) {
+        self.loading = Some(path.file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or_default());
+        let tx = self.tx.clone();
+        let ctx = self.ctx.clone();
+        let res = self.work_res;
+        std::thread::spawn(move || {
+            let r = photo_io::load_photo(&path).map_err(|e| format!("{e:#}")).map(|rgb| {
+                let orig = [rgb.width(), rgb.height()];
+                let full = Img::from_rgb8(&rgb);
+                let work = full.fit_long(res);
+                let thumb = work.fit_long(THUMB_LONG);
+                let color = color_image(&work);
+                (path, work, thumb, color, orig)
+            });
+            let _ = tx.send(WorkerMsg::PhotoLoaded(r));
+            ctx.request_repaint();
+        });
+    }
+
+    fn on_photo(&mut self, path: PathBuf, work: Img, thumb: Img, color: ColorImage, orig: [u32; 2]) {
+        let tex = self.ctx.load_texture("photo", color, TextureOptions::LINEAR);
+        let name = path.file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or_default();
+        self.photo = Some(Photo { path, name, work: Arc::new(work), thumb: Arc::new(thumb), tex, orig_size: orig });
+        self.artworks.clear();
+        self.selected = None;
+        self.director = None;
+        self.zoom = 1.0;
+        self.pan = Vec2::ZERO;
+        self.render_thumbs();
+        self.render_due = Some(self.now());
+    }
+
+    fn render_thumbs(&mut self) {
+        let Some(photo) = &self.photo else { return };
+        self.thumb_gen += 1;
+        self.thumbs = vec![None; STYLES.len()];
+        let (generation, thumb, tx, ctx) = (self.thumb_gen, photo.thumb.clone(), self.tx.clone(), self.ctx.clone());
+        std::thread::spawn(move || {
+            for (idx, st) in STYLES.iter().enumerate() {
+                let c = Ctx::for_image(&thumb, 7);
+                if let Some(img) = (st.render)(&thumb, &Params::defaults(st), &c) {
+                    let _ = tx.send(WorkerMsg::Thumb { generation, idx, img: color_image(&img) });
+                    ctx.request_repaint();
+                }
+            }
+        });
+    }
+
+    // ------------------------------------------------------------ rendering
+
+    pub fn select_style(&mut self, idx: usize) {
+        self.style_idx = idx;
+        self.render_due = Some(self.now());
+        if self.selected_artwork().is_some_and(|a| a.kind != Kind::Algorithm) || self.view == View::Gallery {
+            // Jump back to the algorithm draft so the change is visible.
+            self.selected = self.draft_id();
+        }
+    }
+
+    pub fn params_changed(&mut self) {
+        self.render_due = Some(self.now() + 0.28);
+    }
+
+    pub fn draft_id(&self) -> Option<u64> {
+        self.artworks.iter().find(|a| !a.pinned && a.kind == Kind::Algorithm).map(|a| a.id)
+    }
+
+    fn start_render(&mut self) {
+        let Some(photo) = &self.photo else { return };
+        if let Some(r) = &self.render {
+            r.cancel.store(true, Ordering::Relaxed);
+        }
+        let style = self.style_idx;
+        let params = self.params[style].clone();
+        let seed = self.seed;
+        let finish = self.next_finish.take().unwrap_or_else(|| {
+            self.draft_id().and_then(|id| self.artworks.iter().find(|a| a.id == id)).map(|a| a.finish).unwrap_or_default()
+        });
+        let img = photo.work.clone();
+        let ctx = Ctx::for_image(&img, seed);
+        let id = self.next_id;
+        self.next_id += 1;
+        self.render = Some(RenderJob { id, style, progress: ctx.progress.clone(), cancel: ctx.cancel.clone() });
+        let (tx, ectx) = (self.tx.clone(), self.ctx.clone());
+        std::thread::spawn(move || {
+            if let Some(out) = (STYLES[style].render)(&img, &params, &ctx) {
+                let display = finish.apply(&out);
+                let color = color_image(&display);
+                let _ =
+                    tx.send(WorkerMsg::Rendered { job: id, style, params, seed, base: Arc::new(out), display: Arc::new(display), color });
+            }
+            ectx.request_repaint();
+        });
+        self.pending_finish_for_render = Some((id, finish));
+    }
+
+    pub fn refinish_selected(&mut self) {
+        let Some(a) = self.selected_artwork_mut() else { return };
+        a.finish_gen += 1;
+        let (id, generation, base, finish) = (a.id, a.finish_gen, a.base.clone(), a.finish);
+        let (tx, ctx) = (self.tx.clone(), self.ctx.clone());
+        std::thread::spawn(move || {
+            let display = finish.apply(&base);
+            let color = color_image(&display);
+            let _ = tx.send(WorkerMsg::Finished { artwork: id, generation, display: Arc::new(display), color });
+            ctx.request_repaint();
+        });
+    }
+
+    pub fn add_artwork(&mut self, title: String, subtitle: String, kind: Kind, img: Img, pinned: bool) -> u64 {
+        let id = self.next_id;
+        self.next_id += 1;
+        let img = Arc::new(img);
+        let tex = self.ctx.load_texture(format!("art-{id}"), color_image(&img), TextureOptions::LINEAR);
+        self.artworks.push(Artwork {
+            id,
+            title,
+            subtitle,
+            kind,
+            base: img.clone(),
+            finish: Finish::default(),
+            display: img,
+            tex,
+            pinned,
+            placard: None,
+            recipe: None,
+            prompt: None,
+            saved: None,
+            finish_gen: 0,
+        });
+        id
+    }
+
+    pub fn select(&mut self, id: Option<u64>) {
+        self.selected = id;
+        if let Some(a) = self.selected_artwork()
+            && let Some((style, params, seed)) = a.recipe.clone()
+        {
+            self.style_idx = style;
+            self.params[style] = params;
+            self.seed = seed;
+        }
+    }
+
+    pub fn pin_draft(&mut self) {
+        if let Some(id) = self.draft_id()
+            && let Some(a) = self.artworks.iter_mut().find(|a| a.id == id)
+        {
+            a.pinned = true;
+            let t = a.title.clone();
+            self.toast(format!("Kept “{t}” in the collection"), crate::theme::GOLD);
+        }
+    }
+
+    pub fn delete_artwork(&mut self, id: u64) {
+        self.artworks.retain(|a| a.id != id);
+        if self.selected == Some(id) {
+            self.selected = self.artworks.last().map(|a| a.id);
+        }
+    }
+
+    pub fn navigate(&mut self, dir: i32) {
+        let mut ids: Vec<Option<u64>> = vec![None];
+        ids.extend(self.artworks.iter().map(|a| Some(a.id)));
+        let cur = ids.iter().position(|i| *i == self.selected).unwrap_or(0) as i32;
+        let next = (cur + dir).clamp(0, ids.len() as i32 - 1) as usize;
+        self.select(ids[next]);
+    }
+
+    // ------------------------------------------------------------ export
+
+    pub fn export_selected(&mut self) {
+        let (Some(photo), Some(a)) = (&self.photo, self.selected_artwork()) else {
+            self.toast("Select an artwork to export", crate::theme::MUTED);
+            return;
+        };
+        if self.exporting {
+            return;
+        }
+        let (tx, ctx) = (self.tx.clone(), self.ctx.clone());
+        let stem = format!("{}-{}", photo.path.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default(), a.title);
+        let finish = a.finish;
+        let job: Box<dyn FnOnce() -> anyhow::Result<PathBuf> + Send> = match (a.kind, a.recipe.clone()) {
+            (Kind::Algorithm, Some((style, params, seed))) => {
+                // Re-render at the photo's full resolution for print-quality output.
+                let path = photo.path.clone();
+                Box::new(move || {
+                    let full = Img::from_rgb8(&photo_io::load_photo(&path)?).fit_long(6000);
+                    let c = Ctx::for_image(&full, seed);
+                    let out = (STYLES[style].render)(&full, &params, &c).ok_or_else(|| anyhow::anyhow!("cancelled"))?;
+                    photo_io::save_unique(&finish.apply(&out).to_rgb8(), &photo_io::output_dir(), &stem)
+                })
+            }
+            _ => {
+                let display = a.display.clone();
+                Box::new(move || photo_io::save_unique(&display.to_rgb8(), &photo_io::output_dir(), &stem))
+            }
+        };
+        self.exporting = true;
+        self.toast("Exporting at full resolution…", crate::theme::GOLD);
+        std::thread::spawn(move || {
+            let r = job().map_err(|e| format!("{e:#}"));
+            let _ = tx.send(WorkerMsg::Exported(r));
+            ctx.request_repaint();
+        });
+    }
+
+    pub fn open_output_folder(&self) {
+        let dir = photo_io::output_dir();
+        let _ = std::fs::create_dir_all(&dir);
+        let _ = std::process::Command::new("xdg-open").arg(dir).spawn();
+    }
+
+    // ------------------------------------------------------------ AI
+
+    pub fn ai_busy(&self, engine_title: &str) -> bool {
+        self.jobs.iter().any(|j| j.title == engine_title && j.shared.lock().unwrap().status == ai::JobStatus::Running)
+    }
+
+    /// (Re)discover which CLIs are installed, what they can do and which
+    /// models they offer, then re-validate the role assignments.
+    pub fn rescan_clis(&mut self) {
+        if self.cli_rx.is_some() {
+            return;
+        }
+        let (tx, rx) = channel();
+        self.cli_rx = Some(rx);
+        self.claude = None;
+        self.codex = None;
+        let ctx = self.ctx.clone();
+        std::thread::spawn(move || {
+            let c = std::thread::spawn(ai::detect_claude);
+            let x = ai::detect_codex();
+            let _ = tx.send((c.join().unwrap_or_default(), x));
+            ctx.request_repaint();
+        });
+    }
+
+    pub fn cli_status(&self, cli: ai::Cli) -> Option<&CliStatus> {
+        match cli {
+            ai::Cli::Claude => self.claude.as_ref(),
+            ai::Cli::Codex => self.codex.as_ref(),
+        }
+    }
+
+    fn resolve_roles(&mut self) {
+        self.director_role = self.prefs.resolve(Role::Director, self.claude.as_ref(), self.codex.as_ref());
+        self.painter_role = self.prefs.resolve(Role::Painter, self.claude.as_ref(), self.codex.as_ref());
+    }
+
+    pub fn role(&self, role: Role) -> Option<&RoleCfg> {
+        match role {
+            Role::Director => self.director_role.as_ref(),
+            Role::Painter => self.painter_role.as_ref(),
+        }
+    }
+
+    /// The user picked a CLI and/or model for a role: apply and remember it.
+    pub fn set_role(&mut self, role: Role, cfg: RoleCfg) {
+        match role {
+            Role::Director => {
+                self.prefs.director = Some(cfg.clone());
+                self.director_role = Some(cfg);
+            }
+            Role::Painter => {
+                self.prefs.painter = Some(cfg.clone());
+                self.painter_role = Some(cfg);
+            }
+        }
+        self.prefs.save();
+    }
+
+    pub fn run_director(&mut self) {
+        let (Some(photo), Some(d)) = (&self.photo, &self.director_role) else { return };
+        let job = self.hub.art_director(d, photo.work.clone());
+        self.jobs.push(job);
+    }
+
+    pub fn run_repaint(&mut self, medium: String, brief: String, with_brief: bool) {
+        let (Some(photo), Some(p)) = (&self.photo, &self.painter_role) else { return };
+        let director = if with_brief { self.director_role.as_ref() } else { None };
+        let job = self.hub.repaint(p, director, photo.work.clone(), medium, brief);
+        let msg = match p.cli {
+            ai::Cli::Codex => "Codex is painting — usually 1–2 minutes",
+            ai::Cli::Claude => "Claude is painting in SVG — usually 1–3 minutes",
+        };
+        let color = crate::theme::engine_color(job.engine);
+        self.jobs.push(job);
+        self.toast(msg, color);
+    }
+
+    pub fn run_vector(&mut self) {
+        let (Some(photo), Some(d)) = (&self.photo, &self.director_role) else { return };
+        let job = self.hub.vector(d, photo.work.clone(), &ai::VECTOR_STYLES[self.vector_style]);
+        self.jobs.push(job);
+    }
+
+    pub fn run_placard(&mut self) {
+        let Some(a) = self.selected_artwork() else { return };
+        let how = match a.kind {
+            Kind::Algorithm => format!("rendered with the '{}' algorithm", a.title),
+            Kind::Ai(_) => a.subtitle.clone(),
+        };
+        let (id, img) = (a.id, a.display.clone());
+        let Some(d) = &self.director_role else { return };
+        let job = self.hub.placard(d, id, img, how);
+        self.jobs.push(job);
+    }
+
+    pub fn apply_recipe(&mut self, idx: usize) {
+        let Some(d) = &self.director else { return };
+        let r = &d.report.recipes[idx];
+        let Some(style) = crate::styles::style_index(&r.style) else {
+            self.toast(format!("Unknown style “{}”", r.style), crate::theme::DANGER);
+            return;
+        };
+        self.params[style] = Params::sanitized(&STYLES[style], &r.params);
+        self.next_finish = Some(r.finish.sanitized());
+        let name = r.name.clone();
+        self.style_idx = style;
+        self.recipe_title = Some(name);
+        self.selected = self.draft_id();
+        self.render_due = Some(self.now());
+    }
+
+    fn render_recipe_thumbs(&mut self) {
+        let (Some(photo), Some(d)) = (&self.photo, &mut self.director) else { return };
+        d.generation += 1;
+        let generation = d.generation;
+        let recipes: Vec<_> = d
+            .report
+            .recipes
+            .iter()
+            .map(|r| crate::styles::style_index(&r.style).map(|s| (s, Params::sanitized(&STYLES[s], &r.params), r.finish.sanitized())))
+            .collect();
+        d.thumbs = vec![None; recipes.len()];
+        let (thumb, tx, ctx) = (photo.thumb.clone(), self.tx.clone(), self.ctx.clone());
+        std::thread::spawn(move || {
+            for (idx, r) in recipes.into_iter().enumerate() {
+                let Some((s, params, finish)) = r else { continue };
+                let c = Ctx::for_image(&thumb, 7);
+                if let Some(img) = (STYLES[s].render)(&thumb, &params, &c) {
+                    let _ = tx.send(WorkerMsg::RecipeThumb { generation, idx, img: color_image(&finish.apply(&img)) });
+                    ctx.request_repaint();
+                }
+            }
+        });
+    }
+
+    // ------------------------------------------------------------ pump
+
+    pub fn pump(&mut self) {
+        let now = self.now();
+        if let Some(rx) = &self.cli_rx
+            && let Ok((c, x)) = rx.try_recv()
+        {
+            self.claude = Some(c);
+            self.codex = Some(x);
+            self.cli_rx = None;
+            self.resolve_roles();
+        }
+        if let (Some(due), true) = (self.render_due, self.photo.is_some())
+            && now >= due
+        {
+            self.render_due = None;
+            self.start_render();
+        }
+        while let Ok(msg) = self.rx.try_recv() {
+            self.on_worker(msg);
+        }
+        while let Ok(ev) = self.ai_rx.try_recv() {
+            self.on_ai(ev);
+        }
+        let ttl = 5.0;
+        self.toasts.retain(|t| now - t.born < ttl);
+    }
+
+    fn on_worker(&mut self, msg: WorkerMsg) {
+        match msg {
+            WorkerMsg::FilePicked(p) => {
+                self.picking = false;
+                if let Some(p) = p {
+                    self.load_photo(p);
+                }
+            }
+            WorkerMsg::PhotoLoaded(r) => {
+                self.loading = None;
+                match r {
+                    Ok((path, work, thumb, color, orig)) => self.on_photo(path, work, thumb, color, orig),
+                    Err(e) => self.toast(format!("Could not open photo: {e}"), crate::theme::DANGER),
+                }
+            }
+            WorkerMsg::Thumb { generation, idx, img } => {
+                if generation == self.thumb_gen {
+                    self.thumbs[idx] = Some(self.ctx.load_texture(format!("thumb-{idx}"), img, TextureOptions::LINEAR));
+                }
+            }
+            WorkerMsg::RecipeThumb { generation, idx, img } => {
+                let tex = self.ctx.load_texture(format!("recipe-{idx}"), img, TextureOptions::LINEAR);
+                if let Some(d) = &mut self.director
+                    && d.generation == generation
+                    && idx < d.thumbs.len()
+                {
+                    d.thumbs[idx] = Some(tex);
+                }
+            }
+            WorkerMsg::Rendered { job, style, params, seed, base, display, color } => {
+                if self.render.as_ref().map(|r| r.id) != Some(job) {
+                    return;
+                }
+                self.render = None;
+                let finish = match self.pending_finish_for_render.take() {
+                    Some((id, f)) if id == job => f,
+                    _ => Finish::default(),
+                };
+                let title = self.recipe_title.take().unwrap_or_else(|| STYLES[style].name.to_string());
+                let subtitle = format!("Algorithm · {}", STYLES[style].name);
+                let now = self.now();
+                let tex = self.ctx.load_texture(format!("draft-{job}"), color, TextureOptions::LINEAR);
+                let id = match self.draft_id() {
+                    Some(id) => {
+                        let a = self.artworks.iter_mut().find(|a| a.id == id).unwrap();
+                        let prev = std::mem::replace(&mut a.tex, tex);
+                        a.title = title;
+                        a.subtitle = subtitle;
+                        a.base = base;
+                        a.display = display;
+                        a.finish = finish;
+                        a.recipe = Some((style, params, seed));
+                        a.placard = None;
+                        a.finish_gen += 1;
+                        self.reveal = Some(Reveal { artwork: id, prev: Some(prev), start: now });
+                        id
+                    }
+                    None => {
+                        let id = self.next_id;
+                        self.next_id += 1;
+                        self.artworks.push(Artwork {
+                            id,
+                            title,
+                            subtitle,
+                            kind: Kind::Algorithm,
+                            base,
+                            finish,
+                            display,
+                            tex,
+                            pinned: false,
+                            placard: None,
+                            recipe: Some((style, params, seed)),
+                            prompt: None,
+                            saved: None,
+                            finish_gen: 0,
+                        });
+                        self.reveal = Some(Reveal { artwork: id, prev: None, start: now });
+                        id
+                    }
+                };
+                // Whatever was on stage, a fresh render is what the user asked to see.
+                self.selected = Some(id);
+            }
+            WorkerMsg::Finished { artwork, generation, display, color } => {
+                if let Some(a) = self.artworks.iter_mut().find(|a| a.id == artwork)
+                    && a.finish_gen == generation
+                {
+                    a.display = display;
+                    a.tex.set(color, TextureOptions::LINEAR);
+                }
+            }
+            WorkerMsg::Exported(r) => {
+                self.exporting = false;
+                match r {
+                    Ok(p) => self.toast(format!("Saved {}", p.display()), crate::theme::GOLD),
+                    Err(e) => self.toast(format!("Export failed: {e}"), crate::theme::DANGER),
+                }
+            }
+        }
+    }
+
+    fn on_ai(&mut self, ev: AiEvent) {
+        let title = self.jobs.iter().find(|j| j.id == ev.job_id).map(|j| j.title.clone()).unwrap_or_default();
+        // Learn which models work on this account.
+        match &ev.result {
+            Ok(_) => {
+                let before = self.prefs.unavailable.len();
+                for k in &ev.models {
+                    self.prefs.unavailable.remove(k);
+                }
+                if self.prefs.unavailable.len() != before {
+                    self.prefs.save();
+                }
+            }
+            Err(e) => {
+                if let Some((key, reason)) = ai::parse_model_error(e) {
+                    self.toast(format!("{key} is unavailable: {reason}. Pick another model under Roles."), crate::theme::DANGER);
+                    self.prefs.unavailable.insert(key, reason);
+                    self.prefs.save();
+                    return;
+                }
+            }
+        }
+        match ev.result {
+            Err(e) => {
+                if !e.contains("cancelled") {
+                    self.toast(format!("{title} failed: {}", e.chars().take(160).collect::<String>()), crate::theme::DANGER);
+                }
+            }
+            Ok(AiOutput::Director(report)) => {
+                let c = self.director_role.as_ref().map(|r| crate::theme::engine_color(r.engine())).unwrap_or(crate::theme::CLAUDE);
+                self.toast(format!("Art direction ready: “{}”", report.title), c);
+                if !report.paint_prompt.is_empty() {
+                    self.paint_brief = report.paint_prompt.clone();
+                }
+                self.director = Some(Director { report, thumbs: vec![], generation: 0 });
+                self.render_recipe_thumbs();
+            }
+            Ok(AiOutput::Image { title, subtitle, engine, img, prompt, saved }) => {
+                let Some(photo) = &self.photo else { return };
+                // Match the photo's working size so split comparisons line up.
+                let img = cover_to(&Img::from_rgb8(&img), photo.work.w, photo.work.h);
+                let id = self.add_artwork(title.clone(), subtitle, Kind::Ai(engine), img, true);
+                if let Some(a) = self.artworks.iter_mut().find(|a| a.id == id) {
+                    a.prompt = Some(prompt);
+                    a.saved = Some(saved);
+                }
+                self.selected = Some(id);
+                self.reveal = Some(Reveal { artwork: id, prev: None, start: self.now() });
+                self.toast(format!("“{title}” has arrived"), crate::theme::engine_color(engine));
+            }
+            Ok(AiOutput::Placard { artwork_id, placard }) => {
+                if let Some(a) = self.artworks.iter_mut().find(|a| a.id == artwork_id) {
+                    a.placard = Some(placard);
+                }
+            }
+        }
+    }
+}
+
+impl eframe::App for App {
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        self.pump();
+        self.shortcuts(ui.ctx());
+        self.draw(ui);
+        let busy = self.render.is_some()
+            || self.loading.is_some()
+            || self.render_due.is_some()
+            || self.reveal.is_some()
+            || !self.toasts.is_empty()
+            || self.photo.is_none()
+            || self.jobs.iter().any(|j| j.shared.lock().unwrap().status == ai::JobStatus::Running);
+        if busy {
+            ui.ctx().request_repaint_after(std::time::Duration::from_millis(16));
+        }
+    }
+}

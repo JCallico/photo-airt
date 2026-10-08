@@ -1,0 +1,35 @@
+[package]
+name = "photo-airt"
+version = "0.1.0"
+edition = "2024"
+description = "Photo·AIrt — turn your photographs into art with classic algorithms and AI (Claude & Codex CLIs)"
+license = "MIT"
+authors = ["Javier Callico"]
+repository = "https://github.com/JCallico/photo-airt"
+readme = "README.md"
+keywords = ["image-processing", "art", "egui", "painting", "ai"]
+categories = ["multimedia::images", "graphics"]
+
+[dependencies]
+eframe = { version = "0.36", features = ["persistence"] }
+egui = "0.36"
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp", "tiff", "bmp", "gif", "rayon"] }
+rayon = "1.12"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rfd = "0.17"
+anyhow = "1"
+resvg = "0.48"
+delaunator = "1.1"
+dirs = "7"
+
+[profile.dev]
+opt-level = 2
+
+[profile.dev.package."*"]
+opt-level = 3
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 4
