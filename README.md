@@ -148,7 +148,9 @@ cargo clippy --release --all-targets -- -D warnings
 cargo fmt --check
 ```
 
-Contributor and agent guidelines are in [AGENTS.md](AGENTS.md).
+Changes to `main` go through pull requests, and the same checks run in CI.
+Contributor and agent guidelines are in [AGENTS.md](AGENTS.md). To report a
+security issue, follow [SECURITY.md](SECURITY.md).
 
 ## License
 

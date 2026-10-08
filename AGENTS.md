@@ -24,6 +24,8 @@
   HEIC and similar formats) and saving.
 - `assets/fonts/` holds the bundled OFL fonts. `docs/screenshots/` holds the
   README images.
+- `.github/` holds the CI workflow (actions pinned by commit SHA, read-only
+  token), Dependabot configuration and `CODEOWNERS`.
 - Unit tests live next to the code in `#[cfg(test)]` modules.
 
 ## Development workflow
@@ -39,6 +41,10 @@
   task, and never base the new branch on that task branch. If edits were
   started on the wrong branch, preserve them, then move them onto a branch
   based on the latest `origin/main` before continuing.
+- `main` is protected by a repository ruleset. Changes reach it only through
+  pull requests that pass the `Test, lint and format` CI check, are
+  squash-merged, and keep a linear history. Force-pushes and deletion of
+  `main` are blocked. Never try to bypass or weaken these rules.
 - Creating the branch does not authorize staging, committing or pushing.
   Those still require the explicit authorization described under
   Verification before handoff.
