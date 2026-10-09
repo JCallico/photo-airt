@@ -24,6 +24,10 @@
   HEIC and similar formats) and saving.
 - `assets/fonts/` holds the bundled OFL fonts. `docs/screenshots/` holds the
   README images.
+- `.github/` holds the CI workflow, Dependabot configuration and
+  `CODEOWNERS`. The CI uses only GitHub-owned actions pinned by commit SHA,
+  with a read-only token. `deny.toml` is the `cargo-deny` policy for
+  advisories, licenses, bans and sources.
 - Unit tests live next to the code in `#[cfg(test)]` modules.
 
 ## Development workflow
@@ -39,6 +43,12 @@
   task, and never base the new branch on that task branch. If edits were
   started on the wrong branch, preserve them, then move them onto a branch
   based on the latest `origin/main` before continuing.
+- `main` is protected by a repository ruleset. Changes reach it only through
+  pull requests that pass the required CI checks (`Lint`,
+  `Test (ubuntu-latest)`, `Test (macos-latest)`, `Test (windows-latest)`,
+  `Dependency policy` and `Dependency review`). Pull requests are
+  squash-merged and keep a linear history. Force-pushes and deletion of
+  `main` are blocked. Never try to bypass or weaken these rules.
 - Creating the branch does not authorize staging, committing or pushing.
   Those still require the explicit authorization described under
   Verification before handoff.
@@ -67,6 +77,8 @@ cargo run --release -- path/to/photo.jpg
 cargo test --release
 cargo clippy --release --all-targets -- -D warnings
 cargo fmt --check
+RUSTDOCFLAGS="-D warnings" cargo doc --no-deps
+cargo deny check   # needs cargo-deny, e.g. `mise exec cargo-deny@latest -- cargo-deny check`
 ```
 
 Use `--release` when testing. Image algorithms are very slow unoptimised, and
@@ -147,11 +159,16 @@ sequence:
 cargo test --release
 cargo clippy --release --all-targets -- -D warnings
 cargo fmt --check
+RUSTDOCFLAGS="-D warnings" cargo doc --no-deps
+cargo deny check
 git diff --check
 ```
 
 - Any code, test, configuration or documentation edit after this sequence
   invalidates it. Rerun the full sequence before committing or pushing.
+- If a new dependency introduces a license that is not allowed, never
+  loosen `deny.toml` silently. Present the crate and its license to the user
+  first.
 - If the format check reports files, run `cargo fmt`, then rerun the complete
   sequence. Do not rely on clippy alone, because it does not enforce
   formatting.
