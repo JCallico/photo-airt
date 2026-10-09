@@ -146,7 +146,19 @@ PHOTO_AIRT_DIRECTOR=codex:gpt-5.6-luna PHOTO_AIRT_PAINTER=claude:sonnet \
 cargo test --release
 cargo clippy --release --all-targets -- -D warnings
 cargo fmt --check
+RUSTDOCFLAGS="-D warnings" cargo doc --no-deps
+cargo deny check   # advisories, licenses, bans, sources (deny.toml)
 ```
+
+CI runs these checks on every pull request:
+
+- lint (rustfmt, clippy, rustdoc and whitespace);
+- build and tests on Linux, macOS and Windows;
+- the `cargo-deny` policy;
+- GitHub dependency review.
+
+The `cargo-deny` policy also runs weekly, so new RustSec advisories surface
+even when the code hasn't changed.
 
 Changes to `main` go through pull requests, and the same checks run in CI.
 Contributor and agent guidelines are in [AGENTS.md](AGENTS.md). To report a
