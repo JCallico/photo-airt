@@ -28,7 +28,6 @@ jobs:
     timeout-minutes: 10
     outputs:
       tag: ${{ steps.tag.outputs.tag }}
-      commit: ${{ steps.tag.outputs.commit }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -53,7 +52,6 @@ jobs:
           fi
           git merge-base --is-ancestor HEAD origin/main
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-          echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
   build:
     name: Build (${{ matrix.platform }})
@@ -79,7 +77,8 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ needs.validate.outputs.commit }}
+          # Build the same immutable event commit checked by the validation job.
+          ref: ${{ github.sha }}
           persist-credentials: false
 
       - name: Install system libraries
