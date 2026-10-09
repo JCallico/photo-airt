@@ -625,7 +625,10 @@ mod tests {
     fn classifies_paths_links_and_bare_domains() {
         assert_eq!(classify("/tmp/a.jpg"), Ok(Input::File("/tmp/a.jpg".into())));
         assert_eq!(classify("  \"/tmp/my photo.jpg\"\n"), Ok(Input::File("/tmp/my photo.jpg".into())));
-        assert_eq!(classify("file:///tmp/a%20b.png"), Ok(Input::File("/tmp/a b.png".into())));
+        // file:// URLs are platform specific (Windows needs a drive letter), so build one for this OS.
+        let local = std::env::temp_dir().join("a b.png");
+        let url = Url::from_file_path(&local).unwrap();
+        assert_eq!(classify(url.as_str()), Ok(Input::File(local)));
         assert!(matches!(classify("https://example.com/x.jpg"), Ok(Input::Link(u)) if u.host_str() == Some("example.com")));
         assert!(matches!(classify("example.com/photos/1.jpg"), Ok(Input::Link(u)) if u.scheme() == "https"));
         assert!(classify("ftp://example.com/a.jpg").is_err());
