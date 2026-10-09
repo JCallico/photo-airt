@@ -1,0 +1,186 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  # Run manually with: gh workflow run release.yml --ref vX.Y.Z
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  validate:
+    name: Validate release tag
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Require a version tag on main
+        id: tag
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          if [[ "$REF_TYPE" != tag ]]; then
+            echo "::error::Run this workflow against an existing version tag, not a branch."
+            exit 1
+          fi
+          # cargo metadata reads the package version without needing a TOML parser.
+          version=$(cargo metadata --no-deps --format-version 1 --locked | python3 -c 'import json,sys; print(json.load(sys.stdin)["packages"][0]["version"])')
+          if [[ "$TAG" != "v$version" ]]; then
+            echo "::error::The release tag must match Cargo.toml: v$version."
+            exit 1
+          fi
+          git merge-base --is-ancestor HEAD origin/main
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build (${{ matrix.platform }})
+    needs: validate
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux-x86_64
+            os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+          - platform: macos-aarch64
+            os: macos-14
+            target: aarch64-apple-darwin
+          - platform: macos-x86_64
+            os: macos-15-intel
+            target: x86_64-apple-darwin
+          - platform: windows-x86_64
+            os: windows-2022
+            target: x86_64-pc-windows-msvc
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Build the same immutable event commit checked by the validation job.
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Install system libraries
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libxkbcommon-dev libwayland-dev libx11-dev libgl1-mesa-dev
+
+      - name: Install Rust
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          rustup toolchain install stable --profile minimal --target "$TARGET"
+          rustup default stable
+
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: release-${{ matrix.target }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: release-${{ matrix.target }}-
+
+      - name: Build and test
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          cargo build --release --locked --target "$TARGET"
+          cargo test --release --locked --target "$TARGET"
+
+      - name: Package executable and licenses
+        env:
+          TAG: ${{ needs.validate.outputs.tag }}
+          PLATFORM: ${{ matrix.platform }}
+          TARGET: ${{ matrix.target }}
+        run: |
+          package="photo-airt-$TAG-$PLATFORM"
+          mkdir -p "dist/$package/licenses"
+          cp LICENSE "dist/$package/"
+          cp assets/fonts/OFL-*.txt "dist/$package/licenses/"
+          if [[ "$RUNNER_OS" == Windows ]]; then
+            cp "target/$TARGET/release/photo-airt.exe" "dist/$package/"
+            export PACKAGE="$package"
+            python -c 'import os,shutil; p=os.environ["PACKAGE"]; shutil.make_archive("dist/"+p, "zip", "dist", p)'
+          else
+            cp "target/$TARGET/release/photo-airt" "dist/$package/"
+            chmod 755 "dist/$package/photo-airt"
+            tar -czf "dist/$package.tar.gz" -C dist "$package"
+          fi
+          rm -rf "dist/$package"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-${{ matrix.platform }}
+          path: dist/*
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
+
+  release:
+    name: Prepare draft release
+    needs: [validate, build]
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    # Only this job can modify releases; build jobs have read-only tokens.
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: release-*
+          path: dist
+          merge-multiple: true
+
+      - name: Verify assets and generate checksums
+        working-directory: dist
+        env:
+          TAG: ${{ needs.validate.outputs.tag }}
+        run: |
+          assets=(
+            "photo-airt-$TAG-linux-x86_64.tar.gz"
+            "photo-airt-$TAG-macos-aarch64.tar.gz"
+            "photo-airt-$TAG-macos-x86_64.tar.gz"
+            "photo-airt-$TAG-windows-x86_64.zip"
+          )
+          for asset in "${assets[@]}"; do test -s "$asset"; done
+          sha256sum "${assets[@]}" > SHA256SUMS.txt
+          sha256sum --check --strict SHA256SUMS.txt
+
+      - name: Create or update draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ needs.validate.outputs.tag }}
+        run: |
+          # Do not replace assets on an already published release.
+          if gh release view "$TAG" --json isDraft > release.json; then
+            python3 -c 'import json; assert json.load(open("release.json"))["isDraft"], "This release is already published; use a new version tag."'
+            gh release upload "$TAG" dist/* --clobber
+          else
+            flags=(--draft --verify-tag --generate-notes --title "Photo·AIrt $TAG")
+            if [[ "$TAG" == *-* ]]; then flags+=(--prerelease); fi
+            gh release create "$TAG" dist/* "${flags[@]}"
+          fi

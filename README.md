@@ -9,6 +9,14 @@ API keys: each AI feature appears only when its CLI is found on `PATH`.
 
 ## Getting started
 
+Download the executable archive for your OS from
+[GitHub Releases](https://github.com/JCallico/photo-airt/releases), extract it,
+and run `photo-airt` (`photo-airt.exe` on Windows). Linux and Windows downloads
+are for x64; macOS has separate Apple Silicon and Intel downloads. The
+prebuilt executable does not need Rust.
+
+To build from source:
+
 You need a Rust toolchain (pinned in `mise.toml`, or any recent stable Rust).
 The AI features also need either or both of
 [Claude Code](https://claude.com/claude-code) and
@@ -253,6 +261,8 @@ The `cargo-deny` policy also runs weekly, so new RustSec advisories surface
 even when the code hasn't changed.
 
 Planned features are tracked in [BACKLOG.md](BACKLOG.md).
+Release builds, downloads and publication are documented in
+[docs/releases.md](docs/releases.md).
 Changes to `main` go through pull requests, and the same checks run in CI.
 Contributor and agent guidelines are in [AGENTS.md](AGENTS.md). To report a
 security issue, follow [SECURITY.md](SECURITY.md).
