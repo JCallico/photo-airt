@@ -28,6 +28,11 @@ cd photo-airt
 cargo run --release -- path/to/photo.jpg   # a path or a link; or start empty and press Ctrl+O
 ```
 
+Local paths may be absolute or relative to the current directory. An existing
+local file takes precedence over a bare website address; prefix a relative
+path with `./` (or `.\` on Windows) to identify it as a file even if it is
+missing. Explicit `https://` links always open from the web.
+
 On Linux, the native file dialog uses the XDG desktop portal. HEIC files are
 decoded through ImageMagick, libvips or `heif-convert` when one of them is
 installed.

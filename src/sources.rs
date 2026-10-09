@@ -121,8 +121,8 @@ pub enum Input {
     Link(Url),
 }
 
-/// Understand a pasted string: a path (absolute, `~/…`, `file://…`), an
-/// http(s) link, or a bare `example.com/photo.jpg`.
+/// Understand a pasted string: a local path, an http(s) link, or a bare
+/// `example.com/photo.jpg`. Existing relative paths take precedence over bare domains.
 pub fn classify(raw: &str) -> Result<Input, String> {
     let line = raw.lines().map(str::trim).find(|l| !l.is_empty()).unwrap_or("");
     let s = line.trim_matches(|c| c == '"' || c == '\'' || c == '<' || c == '>');
@@ -140,7 +140,14 @@ pub fn classify(raw: &str) -> Result<Input, String> {
         return dirs::home_dir().map(|h| Input::File(h.join(rest))).ok_or_else(|| "No home directory".into());
     }
     let windows_drive = s.len() > 2 && s.as_bytes()[1] == b':' && (s.as_bytes()[2] == b'\\' || s.as_bytes()[2] == b'/');
-    if s.starts_with('/') || windows_drive || s.starts_with("\\\\") {
+    if s.starts_with('/')
+        || windows_drive
+        || s.starts_with("\\\\")
+        || s.starts_with("./")
+        || s.starts_with("../")
+        || s.starts_with(".\\")
+        || s.starts_with("..\\")
+    {
         return Ok(Input::File(PathBuf::from(s)));
     }
     if let Ok(u) = Url::parse(s) {
@@ -148,6 +155,9 @@ pub fn classify(raw: &str) -> Result<Input, String> {
             "http" | "https" => Ok(Input::Link(u)),
             other => Err(format!("{other}: links are not supported")),
         };
+    }
+    if Path::new(s).exists() {
+        return Ok(Input::File(PathBuf::from(s)));
     }
     // Bare domain: "example.com/a.jpg".
     let first = s.split('/').next().unwrap_or("");
@@ -157,6 +167,9 @@ pub fn classify(raw: &str) -> Result<Input, String> {
         && !s.contains(char::is_whitespace);
     if domain_like && let Ok(u) = Url::parse(&format!("https://{s}")) {
         return Ok(Input::Link(u));
+    }
+    if s.contains('/') || s.contains('\\') {
+        return Ok(Input::File(PathBuf::from(s)));
     }
     Err("Not a link or a file path".into())
 }
@@ -644,6 +657,38 @@ mod tests {
         assert_eq!(all[0], Input::File("/tmp/a.jpg".into()));
         assert!(matches!(&all[2], Input::Link(u) if u.as_str() == "https://example.org/c.webp"));
         assert!(classify_all("nothing useful here").is_empty());
+    }
+
+    #[test]
+    fn classifies_relative_paths_even_when_missing() {
+        for path in
+            ["./photo.jpg", "../photo.jpg", "photos/photo.jpg", "photos/my photo.jpg", r".\photo.jpg", r"..\photo.jpg", r"photos\photo.jpg"]
+        {
+            assert_eq!(classify(path), Ok(Input::File(path.into())));
+        }
+        assert_eq!(classify("\"./my photo.jpg\""), Ok(Input::File("./my photo.jpg".into())));
+        let all = classify_all("./photo.jpg\n../other.png\nhttps://example.com/photo.jpg");
+        assert_eq!(all.len(), 3);
+        assert_eq!(all[0], Input::File("./photo.jpg".into()));
+        assert_eq!(all[1], Input::File("../other.png".into()));
+        assert!(matches!(&all[2], Input::Link(_)));
+    }
+
+    #[test]
+    fn existing_relative_files_take_precedence_over_bare_domains() {
+        // Keep the process working directory unchanged so parallel tests stay isolated.
+        let stamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        let name = format!("photo-airt-relative-{}-{stamp}.jpg", std::process::id());
+        let path = PathBuf::from(&name);
+        std::fs::write(&path, b"local test file").unwrap();
+        let input = classify(&name);
+        let asset = local_asset(&path);
+        let absolute = std::fs::canonicalize(&path).unwrap();
+        std::fs::remove_file(&path).unwrap();
+        assert_eq!(input, Ok(Input::File(path)));
+        assert_eq!(asset.unwrap().local, absolute);
+        // Without a matching local file, the same dotted name remains a bare domain.
+        assert!(matches!(classify(&name), Ok(Input::Link(_))));
     }
 
     #[test]
