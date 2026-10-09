@@ -1,11 +1,14 @@
 mod ai;
 mod app;
+mod app_open;
 mod finish;
 mod imaging;
 mod photo_io;
+mod sources;
 mod styles;
 mod theme;
 mod ui_canvas;
+mod ui_open;
 mod ui_panels;
 
 use std::path::PathBuf;
@@ -18,7 +21,8 @@ fn main() -> anyhow::Result<()> {
     if args.get(1).map(String::as_str) == Some("--ai") {
         return ai_cli(&args[2..]);
     }
-    let initial = args.get(1).map(PathBuf::from).filter(|p| p.exists());
+    // A path or a link (https://…) to open on start.
+    let initial = args.get(1).filter(|a| !a.starts_with("--")).cloned();
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("Photo·AIrt")
@@ -36,7 +40,7 @@ fn main() -> anyhow::Result<()> {
 /// `photo-airt --render <style-id|all> <input> <out-dir> [long-side]`
 fn headless(args: &[String]) -> anyhow::Result<()> {
     let style = args.first().map(String::as_str).unwrap_or("all");
-    let input = PathBuf::from(args.get(1).ok_or_else(|| anyhow::anyhow!("missing input path"))?);
+    let input = resolve_input(args.get(1).ok_or_else(|| anyhow::anyhow!("missing input path or link"))?)?;
     let out_dir = PathBuf::from(args.get(2).map(String::as_str).unwrap_or("."));
     let long: usize = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(2048);
     let photo = imaging::Img::from_rgb8(&photo_io::load_photo(&input)?).fit_long(long);
@@ -56,7 +60,7 @@ fn headless(args: &[String]) -> anyhow::Result<()> {
 fn ai_cli(args: &[String]) -> anyhow::Result<()> {
     use std::sync::Arc;
     let what = args.first().map(String::as_str).unwrap_or("director");
-    let input = PathBuf::from(args.get(1).ok_or_else(|| anyhow::anyhow!("missing input path"))?);
+    let input = resolve_input(args.get(1).ok_or_else(|| anyhow::anyhow!("missing input path or link"))?)?;
     let photo = Arc::new(imaging::Img::from_rgb8(&photo_io::load_photo(&input)?).fit_long(1600));
     let (tx, rx) = std::sync::mpsc::channel();
     let mut hub = ai::AiHub::new(tx, egui::Context::default());
@@ -109,4 +113,23 @@ fn ai_cli(args: &[String]) -> anyhow::Result<()> {
         }
         return Ok(());
     }
+}
+
+/// Command-line inputs may be paths or links; links are downloaded with the
+/// same safeguards as in the app.
+fn resolve_input(arg: &str) -> anyhow::Result<PathBuf> {
+    let input = sources::classify(arg).map_err(|e| anyhow::anyhow!("{arg}: {e}"))?;
+    let cancel = std::sync::atomic::AtomicBool::new(false);
+    let mut last = String::new();
+    let asset = sources::acquire(
+        &input,
+        &mut |p| {
+            if p.stage != last {
+                eprintln!("{}", p.stage);
+                last = p.stage;
+            }
+        },
+        &cancel,
+    )?;
+    Ok(asset.local)
 }

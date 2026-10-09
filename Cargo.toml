@@ -22,6 +22,9 @@ anyhow = "1"
 resvg = "0.48"
 delaunator = "1.1"
 dirs = "7"
+ureq = "3"
+url = "2"
+arboard = { version = "3.6", features = ["wayland-data-control"] }
 
 [profile.dev]
 opt-level = 2

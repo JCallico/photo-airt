@@ -5,7 +5,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, Result, anyhow, bail};
 use image::{DynamicImage, ImageDecoder, ImageReader};
 
 pub fn load_photo(path: &Path) -> Result<image::RgbImage> {
@@ -17,8 +17,19 @@ pub fn load_photo(path: &Path) -> Result<image::RgbImage> {
     }
 }
 
+/// Guard against decompression bombs: photos can come from the internet.
+fn limits() -> image::Limits {
+    let mut l = image::Limits::default();
+    l.max_image_width = Some(30_000);
+    l.max_image_height = Some(30_000);
+    l.max_alloc = Some(1024 * 1024 * 1024);
+    l
+}
+
 fn decode_native(path: &Path) -> Result<image::RgbImage> {
-    let mut decoder = ImageReader::open(path)?.with_guessed_format()?.into_decoder()?;
+    let mut reader = ImageReader::open(path)?.with_guessed_format()?;
+    reader.limits(limits());
+    let mut decoder = reader.into_decoder()?;
     let orientation = decoder.orientation()?;
     let mut img = DynamicImage::from_decoder(decoder)?;
     img.apply_orientation(orientation);
@@ -27,8 +38,18 @@ fn decode_native(path: &Path) -> Result<image::RgbImage> {
 
 fn decode_via_cli(path: &Path) -> Result<image::RgbImage> {
     let tmp = std::env::temp_dir().join(format!("photo-airt-convert-{}.png", std::process::id()));
+    // Only hand converters files whose *content* is a known photo format, and
+    // pin ImageMagick to that coder so it never guesses (or runs scripts).
+    let mut head = Vec::with_capacity(64);
+    if let Ok(f) = std::fs::File::open(path) {
+        let _ = std::io::Read::read_to_end(&mut std::io::Read::take(f, 64), &mut head);
+    }
+    let coder = match crate::sources::sniff_image(&head) {
+        Some(ext) => ext,
+        None => bail!("{} is not a recognised image format", path.display()),
+    };
     let attempts: [(&str, Vec<String>); 3] = [
-        ("magick", vec![format!("{}[0]", path.display()), "-auto-orient".into(), tmp.display().to_string()]),
+        ("magick", vec![format!("{coder}:{}[0]", path.display()), "-auto-orient".into(), tmp.display().to_string()]),
         ("vips", vec!["autorot".into(), path.display().to_string(), tmp.display().to_string()]),
         ("heif-convert", vec![path.display().to_string(), tmp.display().to_string()]),
     ];
