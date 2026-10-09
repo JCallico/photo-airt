@@ -25,7 +25,11 @@ allow = [
     "OFL-1.1",
 ]
 # egui's default font set includes the Ubuntu font.
-exceptions = [{ crate = "epaint_default_fonts", allow = ["Ubuntu-font-1.0"] }]
+exceptions = [
+    { crate = "epaint_default_fonts", allow = ["Ubuntu-font-1.0"] },
+    # Mozilla's CA root certificates used to verify https downloads (via ureq).
+    { crate = "webpki-roots", allow = ["CDLA-Permissive-2.0"] },
+]
 
 [bans]
 multiple-versions = "warn"

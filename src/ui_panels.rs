@@ -45,13 +45,23 @@ fn fmt_elapsed(secs: u64) -> String {
 
 impl App {
     pub fn shortcuts(&mut self, ctx: &egui::Context) {
-        let dropped: Vec<_> =
-            ctx.input(|i| i.raw.dropped_files.iter().map(|f| f.path().to_path_buf()).filter(|p| !p.as_os_str().is_empty()).collect());
-        if let Some(p) = dropped.into_iter().next() {
-            self.load_photo(p);
-        }
-        if ctx.egui_wants_keyboard_input() {
+        // Dropped files (several open together); browsers may hand over links.
+        let dropped: Vec<_> = ctx.input(|i| i.raw.dropped_files.iter().map(|f| f.path().to_string_lossy().to_string()).collect());
+        let reqs: Vec<_> = dropped
+            .iter()
+            .filter(|p| !p.is_empty())
+            .filter_map(|p| crate::sources::classify(p).ok())
+            .map(crate::app_open::OpenRequest::Input)
+            .collect();
+        self.open(reqs);
+        if self.open_sheet.visible || ctx.egui_wants_keyboard_input() {
             return;
+        }
+        // Ctrl+V with a link or path on the clipboard opens it straight away.
+        let pasted: Vec<String> =
+            ctx.input(|i| i.events.iter().filter_map(|e| if let egui::Event::Paste(t) = e { Some(t.clone()) } else { None }).collect());
+        if let Some(text) = pasted.last() {
+            self.open_text(text);
         }
         use egui::Key;
         if ctx.input(|i| !i.modifiers.command && i.key_pressed(Key::A)) {
@@ -72,8 +82,15 @@ impl App {
                 !c && i.key_pressed(Key::R),
             )
         });
+        let (prev_photo, next_photo) = ctx.input(|i| (i.key_pressed(Key::OpenBracket), i.key_pressed(Key::CloseBracket)));
+        if prev_photo {
+            self.tray_step(-1);
+        }
+        if next_photo {
+            self.tray_step(1);
+        }
         if open {
-            self.pick_file();
+            self.show_open_sheet();
         }
         if save {
             self.export_selected();
@@ -91,6 +108,9 @@ impl App {
         }
         if pin {
             self.pin_draft();
+        }
+        if ctx.input(|i| !i.modifiers.command && i.key_pressed(Key::P)) && self.tray.len() > 1 {
+            self.overview.visible = true;
         }
         if reroll && self.photo.is_some() {
             self.reroll();
@@ -110,9 +130,9 @@ impl App {
             .frame(egui::Frame::new().fill(BG).inner_margin(Margin::symmetric(16, 0)).stroke(Stroke::new(1.0, LINE)))
             .show(ui, |ui| self.top_bar(ui));
         egui::Panel::bottom("film")
-            .exact_size(118.0)
-            .frame(egui::Frame::new().fill(BG).inner_margin(Margin::symmetric(14, 10)).stroke(Stroke::new(1.0, LINE)))
-            .show(ui, |ui| self.filmstrip(ui));
+            .exact_size(152.0)
+            .frame(egui::Frame::new().fill(BG).inner_margin(Margin::symmetric(14, 8)).stroke(Stroke::new(1.0, LINE)))
+            .show(ui, |ui| self.collection_bar(ui));
         egui::Panel::left("left")
             .default_size(340.0)
             .size_range(290.0..=480.0)
@@ -124,6 +144,8 @@ impl App {
             .frame(egui::Frame::new().fill(PANEL).inner_margin(Margin::same(14)))
             .show(ui, |ui| self.right_panel(ui));
         egui::CentralPanel::no_frame().show(ui, |ui| self.draw_canvas(ui));
+        self.open_sheet_ui(&ctx);
+        self.photos_overview_ui(&ctx);
         self.toasts_ui(&ctx);
         self.drop_overlay(&ctx);
     }
@@ -141,11 +163,13 @@ impl App {
             ui.label(theme::title_italic("Photo·AIrt", 24.0));
             ui.label(RichText::new("studio").size(11.0).color(FAINT));
             ui.add_space(14.0);
-            if ui.button("📂  Open").on_hover_text("Open a photo (Ctrl+O)").clicked() {
-                self.pick_file();
+            if ui.button("📂  Open").on_hover_text("Open from files, a link or the clipboard (Ctrl+O)").clicked() {
+                self.show_open_sheet();
             }
             if let Some(ph) = &self.photo {
-                ui.label(RichText::new(&ph.name).color(TEXT).size(12.5));
+                let o = &ph.asset.origin;
+                theme::pill(ui, MUTED, &format!("{} {}", o.icon(), o.label())).on_hover_text(o.location());
+                ui.label(RichText::new(ph.name.chars().take(48).collect::<String>()).color(TEXT).size(12.5));
                 ui.label(RichText::new(format!("{} × {}", ph.orig_size[0], ph.orig_size[1])).color(FAINT).size(11.5));
             }
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -675,6 +699,8 @@ impl App {
                 ("Space", "hold to see the original"),
                 ("1 – 4", "split · side by side · single · gallery"),
                 ("← →", "browse the collection"),
+                ("[ ]  ·  P", "previous · next photo · all photos"),
+                ("Ctrl+O · Ctrl+V", "open anywhere · paste a link"),
                 ("K / R", "keep draft · reroll seed"),
                 ("A", "algorithms ⇄ AI studio"),
                 ("Scroll / drag", "zoom · pan · move the split"),
@@ -796,68 +822,140 @@ impl App {
 
     // ------------------------------------------------------------ filmstrip
 
-    fn filmstrip(&mut self, ui: &mut Ui) {
-        let Some(photo) = &self.photo else {
+    /// The collection bar: one row for the whole session. The photo on stage
+    /// is an expanded group (original, artworks, AI jobs in flight); every
+    /// other photo is a compact stack. It scrolls to keep the current group
+    /// in view, and with many photos an "All photos" grid gives an overview.
+    fn collection_bar(&mut self, ui: &mut Ui) {
+        if self.photo.is_none() && self.tray.is_empty() {
             ui.centered_and_justified(|ui| {
                 ui.label(RichText::new("Your collection will appear here.").color(FAINT));
             });
             return;
+        }
+        const HEADER: f32 = 18.0;
+        let th = (ui.available_height() - HEADER - 14.0).max(40.0);
+        let focus = std::mem::take(&mut self.film_focus);
+        let running = |j: &crate::ai::Job| {
+            j.shared.lock().unwrap().status == JobStatus::Running && j.title != "Gallery placard" && j.title != "Art direction"
         };
-        let aspect = photo.work.w as f32 / photo.work.h as f32;
-        let th = ui.available_height() - 4.0;
-        let tw = (th * aspect).clamp(th * 0.6, th * 1.8);
-        let photo_tex = photo.tex.clone();
+        let busy_photos: std::collections::HashSet<u64> =
+            self.jobs.iter().filter(|j| running(j)).filter_map(|j| self.job_photo.get(&j.id).copied()).collect();
+        let current_jobs: Vec<(String, crate::ai::Engine, u64)> = self
+            .jobs
+            .iter()
+            .filter(|j| running(j) && self.job_photo.get(&j.id).copied() == self.current)
+            .map(|j| (j.title.clone(), j.engine, j.started.elapsed().as_secs()))
+            .collect();
+        // Snapshot the stacks so drawing doesn't borrow `self`.
+        let stacks: Vec<(u64, egui::TextureHandle, String, String, usize)> = self
+            .tray
+            .iter()
+            .map(|t| {
+                let pieces = t.session.as_ref().map(|s| s.artworks.len()).unwrap_or(0);
+                (t.id, t.thumb.clone(), t.asset.name.clone(), t.asset.origin.icon().to_string(), pieces)
+            })
+            .collect();
+        let many = stacks.len() >= 2;
+        let loading = self.loading.as_ref().map(|l| l.stage.clone());
+
         let mut action = None;
-        egui::ScrollArea::horizontal().auto_shrink([false, false]).stick_to_right(true).show(ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = 10.0;
-                let r = self.film_tile(ui, &photo_tex, "Original", MUTED, self.selected.is_none(), false, tw, th);
-                if r.clicked() {
-                    action = Some(FilmAction::Select(None));
-                }
-                for a in &self.artworks {
-                    let r = self.film_tile(ui, &a.tex, &a.title, kind_color(a.kind), self.selected == Some(a.id), !a.pinned, tw, th);
-                    if r.clicked() {
-                        action = Some(FilmAction::Select(Some(a.id)));
-                    }
-                    r.context_menu(|ui| {
-                        if !a.pinned && ui.button("📌 Keep in collection").clicked() {
-                            action = Some(FilmAction::Pin(a.id));
-                        }
-                        if ui.button("Export…").clicked() {
-                            action = Some(FilmAction::Export(a.id));
-                        }
-                        if ui.button("🗑 Remove").clicked() {
-                            action = Some(FilmAction::Delete(a.id));
-                        }
-                    });
-                }
-                // Placeholders for AI jobs in flight.
-                for j in &self.jobs {
-                    let s = j.shared.lock().unwrap();
-                    if s.status != JobStatus::Running || j.title == "Gallery placard" || j.title == "Art direction" {
-                        continue;
-                    }
-                    let (r, _) = ui.allocate_exact_size(vec2(tw, th), Sense::hover());
-                    let color = theme::engine_color(j.engine);
-                    shimmer(ui, r, CornerRadius::same(8), color);
-                    ui.painter().rect_stroke(
+        let mut switch = None;
+        let mut remove = None;
+        let mut open_more = false;
+        let mut overview = false;
+
+        ui.horizontal_top(|ui| {
+            ui.spacing_mut().item_spacing.x = 10.0;
+            // Pinned outside the scrolling row so it is always visible.
+            if many {
+                ui.vertical(|ui| {
+                    ui.add_space(4.0);
+                    ui.allocate_ui(vec2(64.0, HEADER), |ui| ui.label(theme::label_caps("Photos")));
+                    ui.add_space(2.0);
+                    let (r, resp) = ui.allocate_exact_size(vec2(64.0, th), Sense::click());
+                    let hov = ui.ctx().animate_bool(resp.id, resp.hovered());
+                    let p = ui.painter();
+                    p.rect(
                         r,
                         CornerRadius::same(8),
-                        Stroke::new(1.0, color.gamma_multiply(0.6)),
+                        theme::lerp_color(CARD, CARD_HI, hov),
+                        Stroke::new(1.0, theme::lerp_color(LINE, GOLD, hov)),
                         egui::StrokeKind::Inside,
                     );
-                    ui.painter().text(r.center() - vec2(0.0, 8.0), Align2::CENTER_CENTER, &j.title, FontId::proportional(11.0), TEXT);
-                    ui.painter().text(
-                        r.center() + vec2(0.0, 10.0),
+                    p.text(r.center() - vec2(0.0, 12.0), Align2::CENTER_CENTER, "⊞", FontId::proportional(24.0), GOLD);
+                    p.text(
+                        r.center() + vec2(0.0, 14.0),
                         Align2::CENTER_CENTER,
-                        fmt_elapsed(j.started.elapsed().as_secs()),
+                        format!("All {}", stacks.len()),
                         FontId::proportional(11.0),
-                        color,
+                        TEXT,
                     );
-                }
+                    if resp.on_hover_text("See every photo in this session").on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
+                        overview = true;
+                    }
+                });
+                let (sep, _) = ui.allocate_exact_size(vec2(1.0, ui.available_height()), Sense::hover());
+                ui.painter()
+                    .line_segment([sep.center_top() + vec2(0.0, 8.0), sep.center_bottom() - vec2(0.0, 4.0)], Stroke::new(1.0, LINE));
+            }
+            egui::ScrollArea::horizontal().id_salt("collection").auto_shrink([false, false]).show(ui, |ui| {
+                ui.horizontal_top(|ui| {
+                    ui.spacing_mut().item_spacing.x = 10.0;
+                    for (id, tex, name, icon, pieces) in &stacks {
+                        if Some(*id) == self.current {
+                            let group = self.current_group(ui, th, HEADER, &current_jobs, &mut action);
+                            if focus {
+                                group.scroll_to_me(Some(egui::Align::Center));
+                            }
+                        } else {
+                            let r = stack_tile(ui, tex, name, icon, *pieces, busy_photos.contains(id), th, HEADER);
+                            if r.clicked() {
+                                switch = Some(*id);
+                            }
+                            r.context_menu(|ui| {
+                                if ui.button("Remove from this session").clicked() {
+                                    remove = Some(*id);
+                                }
+                            });
+                        }
+                    }
+                    if self.current.is_none() && self.photo.is_some() {
+                        self.current_group(ui, th, HEADER, &current_jobs, &mut action);
+                    }
+                    // Photos still arriving.
+                    if let Some(stage) = &loading {
+                        ui.vertical(|ui| {
+                            ui.add_space(4.0);
+                            ui.allocate_ui(vec2(th, HEADER), |ui| ui.label(RichText::new("Arriving").size(11.0).color(FAINT)));
+                            ui.add_space(2.0);
+                            let (r, _) = ui.allocate_exact_size(vec2(th, th), Sense::hover());
+                            shimmer(ui, r, CornerRadius::same(8), CODEX);
+                            let g = ui.painter().layout(stage.clone(), FontId::proportional(10.5), MUTED, th - 12.0);
+                            ui.painter().galley(r.center() - g.size() / 2.0, g, MUTED);
+                        });
+                    }
+                    ui.vertical(|ui| {
+                        ui.add_space(4.0 + HEADER + 2.0);
+                        let (r, resp) = ui.allocate_exact_size(vec2(th * 0.62, th), Sense::click());
+                        let hov = ui.ctx().animate_bool(resp.id, resp.hovered());
+                        ui.painter().rect(
+                            r,
+                            CornerRadius::same(8),
+                            theme::lerp_color(CARD, CARD_HI, hov),
+                            Stroke::new(1.0, theme::lerp_color(LINE, GOLD, hov)),
+                            egui::StrokeKind::Inside,
+                        );
+                        ui.painter().text(r.center() - vec2(0.0, 8.0), Align2::CENTER_CENTER, "+", FontId::proportional(22.0), MUTED);
+                        ui.painter().text(r.center() + vec2(0.0, 14.0), Align2::CENTER_CENTER, "Add", FontId::proportional(10.5), FAINT);
+                        if resp.on_hover_text("Open more photos (Ctrl+O)").on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
+                            open_more = true;
+                        }
+                    });
+                });
             });
         });
+
         match action {
             Some(FilmAction::Select(id)) => self.select(id),
             Some(FilmAction::Pin(id)) => {
@@ -872,6 +970,112 @@ impl App {
             }
             None => {}
         }
+        if let Some(id) = switch {
+            self.switch_to(id);
+        }
+        if let Some(id) = remove {
+            self.remove_from_tray(id);
+        }
+        if open_more {
+            self.show_open_sheet();
+        }
+        if overview {
+            self.overview.visible = true;
+        }
+    }
+
+    /// The photo on stage, expanded: a framed group with its original,
+    /// artworks and AI jobs in flight.
+    fn current_group(
+        &self,
+        ui: &mut Ui,
+        th: f32,
+        header: f32,
+        jobs: &[(String, crate::ai::Engine, u64)],
+        action: &mut Option<FilmAction>,
+    ) -> egui::Response {
+        let Some(photo) = &self.photo else { return ui.label("") };
+        let tile_h = th - 6.0;
+        let aspect = photo.work.w as f32 / photo.work.h as f32;
+        let tw = (tile_h * aspect).clamp(tile_h * 0.6, tile_h * 1.8);
+        let frame = egui::Frame::new()
+            .fill(Color32::from_rgb(27, 25, 31))
+            .stroke(Stroke::new(1.0, GOLD.gamma_multiply(0.4)))
+            .corner_radius(CornerRadius::same(12))
+            .inner_margin(Margin { left: 8, right: 8, top: 4, bottom: 6 });
+        frame
+            .show(ui, |ui| {
+                ui.vertical(|ui| {
+                    ui.spacing_mut().item_spacing.y = 2.0;
+                    ui.allocate_ui_with_layout(vec2(ui.available_width(), header), Layout::left_to_right(Align::Center), |ui| {
+                        let o = &photo.asset.origin;
+                        ui.label(
+                            RichText::new(format!("{} {}", o.icon(), photo.name.chars().take(48).collect::<String>()))
+                                .size(11.5)
+                                .color(TEXT)
+                                .strong(),
+                        )
+                        .on_hover_text(o.location());
+                        let n = self.artworks.len();
+                        if n > 0 {
+                            ui.label(RichText::new(format!("· {n} piece{}", if n == 1 { "" } else { "s" })).size(11.0).color(FAINT));
+                        }
+                    });
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 8.0;
+                        if self.film_tile(ui, &photo.tex, "Original", MUTED, self.selected.is_none(), false, tw, tile_h).clicked() {
+                            *action = Some(FilmAction::Select(None));
+                        }
+                        for a in &self.artworks {
+                            let r = self.film_tile(
+                                ui,
+                                &a.tex,
+                                &a.title,
+                                kind_color(a.kind),
+                                self.selected == Some(a.id),
+                                !a.pinned,
+                                tw,
+                                tile_h,
+                            );
+                            if r.clicked() {
+                                *action = Some(FilmAction::Select(Some(a.id)));
+                            }
+                            r.context_menu(|ui| {
+                                if !a.pinned && ui.button("📌 Keep in collection").clicked() {
+                                    *action = Some(FilmAction::Pin(a.id));
+                                }
+                                if ui.button("Export…").clicked() {
+                                    *action = Some(FilmAction::Export(a.id));
+                                }
+                                if ui.button("🗑 Remove").clicked() {
+                                    *action = Some(FilmAction::Delete(a.id));
+                                }
+                            });
+                        }
+                        for (title, engine, secs) in jobs {
+                            let (r, _) = ui.allocate_exact_size(vec2(tw, tile_h), Sense::hover());
+                            let color = theme::engine_color(*engine);
+                            shimmer(ui, r, CornerRadius::same(8), color);
+                            ui.painter().rect_stroke(
+                                r,
+                                CornerRadius::same(8),
+                                Stroke::new(1.0, color.gamma_multiply(0.6)),
+                                egui::StrokeKind::Inside,
+                            );
+                            let g = ui.painter().layout(title.clone(), FontId::proportional(11.0), TEXT, tw - 12.0);
+                            ui.painter().galley(r.center() - vec2(g.size().x / 2.0, g.size().y / 2.0 + 8.0), g, TEXT);
+                            ui.painter().text(
+                                r.center() + vec2(0.0, 12.0),
+                                Align2::CENTER_CENTER,
+                                fmt_elapsed(*secs),
+                                FontId::proportional(11.0),
+                                color,
+                            );
+                        }
+                    });
+                });
+            })
+            .response
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -959,4 +1163,74 @@ impl App {
         p.rect_stroke(rect.shrink(30.0), CornerRadius::same(24), Stroke::new(2.0, GOLD), egui::StrokeKind::Inside);
         p.text(rect.center(), Align2::CENTER_CENTER, "Drop to open your photo", FontId::new(36.0, serif_italic()), TEXT);
     }
+}
+
+/// A parked photo as a compact stack: offset cards behind the thumbnail, a
+/// name above, a badge counting its artworks and a pulse while AI works on it.
+#[allow(clippy::too_many_arguments)]
+fn stack_tile(
+    ui: &mut Ui,
+    tex: &egui::TextureHandle,
+    name: &str,
+    icon: &str,
+    pieces: usize,
+    busy: bool,
+    th: f32,
+    header: f32,
+) -> egui::Response {
+    let size = tex.size();
+    let w = (th * size[0] as f32 / size[1].max(1) as f32).clamp(th * 0.62, th * 0.95);
+    let inner = ui.vertical(|ui| {
+        ui.add_space(4.0);
+        let chars = ((w + 6.0) / 6.5) as usize;
+        let label: String = if name.chars().count() > chars {
+            format!("{}…", name.chars().take(chars.saturating_sub(1)).collect::<String>())
+        } else {
+            name.to_string()
+        };
+        ui.allocate_ui(vec2(w + 6.0, header), |ui| ui.label(RichText::new(label).size(11.0).color(MUTED)));
+        ui.add_space(2.0);
+        let (rect, resp) = ui.allocate_exact_size(vec2(w + 6.0, th), Sense::click());
+        let hov = ui.ctx().animate_bool(resp.id, resp.hovered());
+        let front = Rect::from_min_size(rect.min + vec2(0.0, 6.0), vec2(w, th - 6.0));
+        let p = ui.painter();
+        for (k, shade) in [(2.0f32, 34u8), (1.0, 46)] {
+            let back = front.translate(vec2(3.0 * k, -3.0 * k));
+            p.rect(
+                back,
+                CornerRadius::same(7),
+                Color32::from_gray(shade),
+                Stroke::new(1.0, Color32::from_white_alpha(18)),
+                egui::StrokeKind::Inside,
+            );
+        }
+        egui::Image::new(tex).uv(cover_uv(size, front.width(), front.height())).corner_radius(CornerRadius::same(7)).paint_at(ui, front);
+        let p = ui.painter();
+        p.rect_filled(front, CornerRadius::same(7), Color32::from_black_alpha((110.0 * (1.0 - hov)) as u8));
+        p.rect_stroke(
+            front,
+            CornerRadius::same(7),
+            Stroke::new(1.0, theme::lerp_color(Color32::from_white_alpha(30), GOLD, hov)),
+            egui::StrokeKind::Inside,
+        );
+        p.text(front.left_bottom() + vec2(6.0, -5.0), Align2::LEFT_BOTTOM, icon, FontId::proportional(10.0), TEXT);
+        if pieces > 0 {
+            let b = Rect::from_min_size(front.right_top() + vec2(-24.0, 5.0), vec2(19.0, 15.0));
+            p.rect_filled(b, CornerRadius::same(7), Color32::from_black_alpha(210));
+            p.text(b.center(), Align2::CENTER_CENTER, pieces.to_string(), FontId::proportional(9.5), GOLD);
+        }
+        if busy {
+            let t = ui.input(|i| i.time) as f32;
+            let c = front.right_bottom() + vec2(-9.0, -9.0);
+            p.circle_filled(c, 4.0 + 1.5 * (t * 4.0).sin().abs(), CODEX.gamma_multiply(0.5));
+            p.circle_filled(c, 3.0, CODEX);
+        }
+        let tip = if pieces > 0 {
+            format!("{name}\n{pieces} piece{} · click to open", if pieces == 1 { "" } else { "s" })
+        } else {
+            format!("{name}\nclick to open")
+        };
+        resp.on_hover_text(tip).on_hover_cursor(egui::CursorIcon::PointingHand)
+    });
+    inner.inner
 }

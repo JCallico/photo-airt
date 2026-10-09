@@ -20,8 +20,24 @@
   pump.
 - `src/ui_canvas.rs` (the stage) and `src/ui_panels.rs` (chrome) draw the UI.
   `src/theme.rs` holds colours, fonts and custom widgets.
-- `src/photo_io.rs` handles loading (EXIF orientation, plus a CLI fallback for
-  HEIC and similar formats) and saving.
+- `src/photo_io.rs` handles decoding (EXIF orientation, decoder limits, plus a
+  content-sniffed CLI fallback for HEIC and similar formats) and saving.
+- `src/sources.rs` covers where photos come from:
+  - input classification (paths and links);
+  - the hardened downloader;
+  - preview-image discovery for web pages;
+  - the clipboard;
+  - recents.
+
+  Every source materialises its photo as a local file plus an `Origin`.
+- `src/app_open.rs` holds the open flow and the session's photos (`tray`). Each photo's
+  studio state is parked in a `Session`, and AI jobs deliver to the photo
+  they were started for.
+- `src/ui_open.rs` draws the Open sheet, the "All photos" contact sheet and
+  the progress pill. The collection bar (the photo on stage expanded, other
+  photos as stacks) lives in `src/ui_panels.rs`.
+- `BACKLOG.md` tracks planned features with their status and open design
+  questions. Add ideas there rather than starting unplanned work.
 - `assets/fonts/` holds the bundled OFL fonts. `docs/screenshots/` holds the
   README images.
 - `.github/` holds the CI workflow, Dependabot configuration and
@@ -105,12 +121,28 @@ the dev profile already optimises dependencies.
   - command-line modes and flags;
   - `PHOTO_AIRT_*` environment variables;
   - style ids and parameter keys, which AI recipes reference by name;
-  - the `prefs.json` format;
+  - the `prefs.json` and `recents.json` formats;
   - the output locations (`~/Pictures/Photo-AIrt`, `~/.cache/photo-airt`).
 - When renaming shared symbols, search the whole source tree, including
   tests, before building.
 - Keep sensitive values out of version control. The app needs no API keys;
   never add any.
+
+## Photo sources
+
+- Every source must work for anyone who opens the app, with no setup. Never
+  add a source that needs an OAuth application, an account sign-in, API keys
+  or per-user configuration. That rules out the Google Photos API and iCloud,
+  for example.
+- Network access goes through `sources::Fetcher` only, and keeps its
+  safeguards:
+  - https only;
+  - size and time limits;
+  - limited redirects;
+  - content sniffing rather than trusting extensions or `Content-Type`.
+- Never pass unsniffed bytes to external converters.
+- Tests use the local `127.0.0.1` server helpers (`with_policy(true, …)`),
+  never the real internet.
 
 ## AI CLI integration
 

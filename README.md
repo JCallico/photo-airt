@@ -17,12 +17,98 @@ The AI features also need either or both of
 ```bash
 git clone https://github.com/JCallico/photo-airt.git
 cd photo-airt
-cargo run --release -- path/to/photo.jpg   # or omit the path and drop a photo on the window
+cargo run --release -- path/to/photo.jpg   # a path or a link; or start empty and press Ctrl+O
 ```
 
 On Linux, the native file dialog uses the XDG desktop portal. HEIC files are
 decoded through ImageMagick, libvips or `heif-convert` when one of them is
 installed.
+
+## Open photos from anywhere
+
+Photos can come from your computer, the web or the clipboard. There are no
+accounts and nothing to set up. Press `Ctrl+O` (or **Open**) for the
+**Open a photo** sheet, which has three parts.
+
+![The Open a photo sheet: smart input bar, Files, Clipboard and Web tiles, and recent photos](docs/screenshots/open-anywhere.jpg)
+
+**The smart input bar** understands whatever you type or paste, and tells you
+live what it found:
+
+* a file path (`/…`, `~/…`, `file://…`);
+* an image link;
+* a web page link, such as a Wikipedia article, a news story or a Flickr or
+  Unsplash page. The app opens the page's preview image (`og:image`,
+  `twitter:image`).
+
+If the clipboard holds a link, the bar offers it straight away.
+
+**The source tiles** are Files, Clipboard and The web. **Files** opens the file
+dialog and lets you pick several photos at once. **Clipboard** shows a live
+preview of a copied image; with the input bar empty, `Enter` pastes it. **The
+web** takes you to the input bar.
+
+**Recents** show thumbnails of your last photos, including web ones (served
+from a local cache), and work across launches.
+
+You can also skip the sheet:
+
+* **`Ctrl+V`** anywhere in the studio opens a copied link or path immediately,
+  or several of them, one per line.
+* **Drop** one or more files on the window.
+* **Start with a link:** `photo-airt https://…`.
+
+The top bar shows where the photo came from (📁 local file, 🌐 website,
+📋 clipboard). Gallery wall labels credit the source, for example "After a
+photograph from en.wikipedia.org".
+
+### The collection bar
+
+Every photo you open in a session joins the **collection bar** at the bottom
+of the window. There is one row for everything:
+
+* **The photo on stage is expanded** in a framed group: its original, its
+  artworks and any AI jobs still painting.
+* **Every other photo is a compact stack.** Its artworks are folded away
+  behind it, a badge counts them, and a pulsing dot shows that an AI job is
+  working on it.
+
+Click a stack, or press `[` / `]`, and it expands in place while the previous
+photo folds into a stack. Each photo keeps its own studio state: artworks,
+art direction and style previews. Returning to a photo is instant, and quick
+navigation skips ahead without waiting for every photo to load.
+
+AI jobs belong to the photo they were started for. If you switch photos while
+Codex is painting, the result is delivered to the right photo's stack.
+
+![The collection bar: the photo on stage expanded with its artworks, every other photo as a stack](docs/screenshots/collection.jpg)
+
+The bar scrolls and keeps the photo on stage centred. Once two or more
+photos are open, an **All photos** tile is pinned at the left end of the bar,
+so it stays visible however far you scroll (or press `P`). It opens a contact
+sheet of every photo, with a filter by name or source, artwork counts, and a remove button
+on hover. Paste several links or paths at once (one per line) to open them
+all together.
+
+![All photos: a filterable contact sheet of every photo in the session](docs/screenshots/all-photos.jpg)
+
+### Downloading safely
+
+Links are fetched conservatively:
+
+* **https only;**
+* a **64 MB size limit**, plus connect and overall timeouts;
+* at most 5 redirects;
+* **downloads must *sniff* as an image**. File extensions and the server's
+  stated content type are never trusted;
+* decoding has memory and pixel limits, which protect against images crafted
+  to exhaust memory;
+* the external HEIC/AVIF converters are only used for files whose content
+  identifies them as those formats.
+
+Downloaded and pasted photos are cached in `~/.cache/photo-airt/sources`.
+Cached copies that are no longer among your recents are cleaned up
+automatically.
 
 ## Fourteen algorithmic styles
 
@@ -118,7 +204,7 @@ Views switch with keys `1`–`4`:
 * **Single.**
 * **Gallery.**
 
-The filmstrip holds the collection. A new render replaces the current
+The collection bar holds each photo's artworks. A new render replaces the current
 *draft*. Keep a draft with `K` and it becomes a permanent piece. **Export**
 (`Ctrl+S`) re-renders algorithmic pieces at the photo's full resolution and
 saves them to `~/Pictures/Photo-AIrt`.
@@ -128,17 +214,23 @@ saves them to `~/Pictures/Photo-AIrt`.
 | `Space` (hold) | Show the original |
 | `1`–`4` | Switch view |
 | `←` / `→` | Browse the collection |
+| `[` / `]` | Previous / next photo |
+| `P` | All photos (contact sheet) |
 | `K` / `R` | Keep the draft / reroll the seed |
 | `A` | Switch between Algorithms and AI Studio |
-| `Ctrl+O` / `Ctrl+S` | Open / export |
+| `Ctrl+O` / `Ctrl+S` | Open a photo / export |
+| `Ctrl+V` | Open a copied link or file path |
 
 ## Command line
 
 ```bash
+photo-airt https://en.wikipedia.org/wiki/The_Starry_Night       # open a link (or a path) in the studio
 photo-airt --render <style-id|all> in.jpg out_dir [long-side]   # batch-render styles
 PHOTO_AIRT_DIRECTOR=codex:gpt-5.6-luna PHOTO_AIRT_PAINTER=claude:sonnet \
   photo-airt --ai <director|vector|repaint|duet|placard> in.jpg [out.png]   # run one AI job
 ```
+
+Every input above can be a path or a link.
 
 ## Development
 
@@ -160,6 +252,7 @@ CI runs these checks on every pull request:
 The `cargo-deny` policy also runs weekly, so new RustSec advisories surface
 even when the code hasn't changed.
 
+Planned features are tracked in [BACKLOG.md](BACKLOG.md).
 Changes to `main` go through pull requests, and the same checks run in CI.
 Contributor and agent guidelines are in [AGENTS.md](AGENTS.md). To report a
 security issue, follow [SECURITY.md](SECURITY.md).

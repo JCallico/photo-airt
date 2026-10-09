@@ -231,6 +231,11 @@ impl App {
             }
         }
 
+        // Download / open progress while a photo is already on stage.
+        if self.loading.is_some() {
+            self.loading_pill(ui, pos2(rect.center().x, rect.top() + 24.0));
+        }
+
         // Render progress.
         if let Some(r) = &self.render {
             let frac = r.progress.load(std::sync::atomic::Ordering::Relaxed) as f32 / 1000.0;
@@ -344,18 +349,68 @@ impl App {
         let btn = Rect::from_center_size(c + vec2(0.0, 52.0), vec2(230.0, 34.0));
         let mut child = ui.new_child(egui::UiBuilder::new().max_rect(btn));
         if self.loading.is_some() {
-            ring(painter, btn.center() + vec2(-80.0, 0.0), 10.0, 0.25 + 0.2 * (t * 3.0).sin(), GOLD, 2.5);
+            let label = self.loading.as_ref().map(|l| l.label.clone()).unwrap_or_default();
             painter.text(
-                btn.center() + vec2(10.0, 0.0),
+                btn.center() + vec2(0.0, -6.0),
                 Align2::CENTER_CENTER,
-                format!("Developing {}…", self.loading.as_deref().unwrap_or("")),
-                FontId::proportional(14.0),
-                TEXT,
+                format!("Opening {label}"),
+                FontId::proportional(13.0),
+                MUTED,
             );
+            self.loading_pill(ui, btn.center() + vec2(0.0, 34.0));
+            return;
         } else if theme::accent_button(&mut child, "Open a photo", GOLD, true).clicked() {
-            self.pick_file();
+            self.show_open_sheet();
         }
-        painter.text(c + vec2(0.0, 98.0), Align2::CENTER_CENTER, "or drop an image anywhere  ·  Ctrl+O", FontId::proportional(12.0), FAINT);
+        painter.text(
+            c + vec2(0.0, 98.0),
+            Align2::CENTER_CENTER,
+            "Files, links and the clipboard  ·  Ctrl+O  ·  Ctrl+V a link  ·  drop files anywhere",
+            FontId::proportional(12.0),
+            FAINT,
+        );
+        // Pick up where you left off.
+        let items: Vec<_> = self.recents.items.iter().take(6).cloned().collect();
+        if !items.is_empty() {
+            let (tw, th, gap) = (120.0, 80.0, 12.0);
+            let total = items.len() as f32 * (tw + gap) - gap;
+            let y = c.y + 156.0;
+            painter.text(pos2(c.x, y - 12.0), Align2::CENTER_BOTTOM, "RECENT", FontId::proportional(10.5), FAINT);
+            for (i, r) in items.iter().enumerate() {
+                let rect = Rect::from_min_size(pos2(c.x - total / 2.0 + i as f32 * (tw + gap), y), vec2(tw, th));
+                let resp = ui.interact(rect, egui::Id::new(("empty-recent", i)), Sense::click());
+                let hov = ui.ctx().animate_bool(resp.id, resp.hovered());
+                if let Some(tex) = self.recent_texture(&r.thumb) {
+                    let size = tex.size();
+                    let ta = size[0] as f32 / size[1].max(1) as f32;
+                    let uv = if ta > tw / th {
+                        let u0 = (1.0 - (tw / th) / ta) / 2.0;
+                        Rect::from_min_max(pos2(u0, 0.0), pos2(1.0 - u0, 1.0))
+                    } else {
+                        let v0 = (1.0 - ta / (tw / th)) / 2.0;
+                        Rect::from_min_max(pos2(0.0, v0), pos2(1.0, 1.0 - v0))
+                    };
+                    egui::Image::new(&tex)
+                        .uv(uv)
+                        .corner_radius(CornerRadius::same(8))
+                        .tint(Color32::from_white_alpha((170.0 + 85.0 * hov) as u8))
+                        .paint_at(ui, rect);
+                }
+                painter.rect_stroke(
+                    rect,
+                    CornerRadius::same(8),
+                    Stroke::new(1.0, theme::lerp_color(LINE, GOLD, hov)),
+                    egui::StrokeKind::Inside,
+                );
+                if resp
+                    .on_hover_text(format!("{}\n{} {}", r.asset.name, r.asset.origin.icon(), r.asset.origin.label()))
+                    .on_hover_cursor(egui::CursorIcon::PointingHand)
+                    .clicked()
+                {
+                    self.open_recent(i);
+                }
+            }
+        }
     }
 
     fn draw_gallery(&mut self, ui: &mut Ui, painter: &egui::Painter, rect: Rect, t: f32) {
@@ -428,16 +483,18 @@ impl App {
         // Wall label.
         let (title, medium, note) = match art {
             Some(a) => match &a.placard {
-                Some(p) => (p.title.clone(), format!("{}, {}", p.medium, p.year), p.note.clone()),
+                Some(p) => (p.title.clone(), format!("{}, {}\n{}", p.medium, p.year, photo.asset.origin.after_credit()), p.note.clone()),
                 None => {
                     let note = match a.kind {
                         Kind::Algorithm => a.recipe.as_ref().map(|r| STYLES[r.0].technique.to_string()).unwrap_or_default(),
                         Kind::Ai(_) => a.prompt.clone().unwrap_or_default().chars().take(260).collect(),
                     };
-                    (a.title.clone(), a.subtitle.clone(), note)
+                    (a.title.clone(), format!("{}\n{}", a.subtitle, photo.asset.origin.after_credit()), note)
                 }
             },
-            None => (photo.name.clone(), format!("Photograph, {} × {} px", photo.orig_size[0], photo.orig_size[1]), String::new()),
+            None => {
+                (photo.name.clone(), format!("Photograph, {} × {} px", photo.orig_size[0], photo.orig_size[1]), photo.asset.origin.credit())
+            }
         };
         let pw = 300.0;
         let ink = Color32::from_rgb(32, 29, 33);

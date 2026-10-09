@@ -1,6 +1,7 @@
 //! Application state, background workers and the message pump.
 //! Drawing lives in `ui_canvas.rs` (the stage) and `ui_panels.rs` (chrome).
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 use std::sync::mpsc::{Receiver, Sender, channel};
@@ -12,6 +13,7 @@ use crate::ai::{self, AiEvent, AiHub, AiOutput, CliStatus, DirectorReport, Engin
 use crate::finish::Finish;
 use crate::imaging::Img;
 use crate::photo_io;
+use crate::sources::{self, Asset, Recents};
 use crate::styles::{Ctx, Params, STYLES};
 
 pub const THUMB_LONG: usize = 420;
@@ -39,6 +41,8 @@ pub enum Kind {
 pub struct Photo {
     pub path: PathBuf,
     pub name: String,
+    /// Where it came from (file, link, clipboard) — shown in the UI and on wall labels.
+    pub asset: Asset,
     pub work: Arc<Img>,
     pub thumb: Arc<Img>,
     pub tex: TextureHandle,
@@ -88,19 +92,51 @@ pub struct Director {
 }
 
 pub enum WorkerMsg {
-    PhotoLoaded(Result<(PathBuf, Img, Img, ColorImage, [u32; 2]), String>),
+    PhotoLoaded { batch: u64, result: Result<(Asset, Img, Img, ColorImage, [u32; 2]), String> },
+    Acquiring { batch: u64, progress: sources::Progress },
+    Acquired { asset: Asset, thumb: ColorImage, thumb_file: PathBuf },
+    AcquireFailed { error: String },
+    AcquireDone { batch: u64 },
+    Clipboard(crate::app_open::ClipStatus),
     Thumb { generation: u64, idx: usize, img: ColorImage },
     RecipeThumb { generation: u64, idx: usize, img: ColorImage },
     Rendered { job: u64, style: usize, params: Params, seed: u64, base: Arc<Img>, display: Arc<Img>, color: ColorImage },
     Finished { artwork: u64, generation: u64, display: Arc<Img>, color: ColorImage },
     Exported(Result<PathBuf, String>),
-    FilePicked(Option<PathBuf>),
+    FilesPicked(Vec<PathBuf>),
+}
+
+/// An open/download in progress, with live progress and cancellation.
+pub struct LoadState {
+    pub batch: u64,
+    pub label: String,
+    pub stage: String,
+    pub done: u64,
+    pub total: Option<u64>,
+    pub cancel: Arc<AtomicBool>,
+}
+
+/// Everything that belongs to one photo, parked while another is on stage.
+pub struct Session {
+    pub photo: Photo,
+    pub artworks: Vec<Artwork>,
+    pub selected: Option<u64>,
+    pub director: Option<Director>,
+    pub thumbs: Vec<Option<TextureHandle>>,
+}
+
+/// A photo opened in this session (shown as a stack when not on stage).
+pub struct TrayItem {
+    pub id: u64,
+    pub asset: Asset,
+    pub thumb: TextureHandle,
+    pub session: Option<Session>,
 }
 
 pub struct App {
     pub ctx: egui::Context,
     pub photo: Option<Photo>,
-    pub loading: Option<String>,
+    pub loading: Option<LoadState>,
     pub artworks: Vec<Artwork>,
     pub selected: Option<u64>,
     pub view: View,
@@ -142,10 +178,25 @@ pub struct App {
     pub work_res: usize,
     pub pending_finish_for_render: Option<(u64, Finish)>,
     pub recipe_title: Option<String>,
+    /// Every photo opened this session, with its parked studio state.
+    pub tray: Vec<TrayItem>,
+    /// Tray id of the photo on stage.
+    pub current: Option<u64>,
+    pub recents: Recents,
+    pub recent_tex: HashMap<PathBuf, TextureHandle>,
+    pub open_sheet: crate::app_open::OpenSheet,
+    /// AI job id → tray id of the photo it was started for.
+    pub job_photo: HashMap<u64, u64>,
+    /// Scroll the collection bar to the photo on stage on the next frame.
+    pub film_focus: bool,
+    /// Photo being brought on stage (still decoding), so rapid navigation
+    /// keeps moving instead of restarting from the photo currently shown.
+    pub switching_to: Option<u64>,
+    pub overview: crate::app_open::Overview,
 }
 
 /// Scale to cover `w`×`h` and centre-crop, so AI results never get stretched.
-fn cover_to(src: &Img, w: usize, h: usize) -> Img {
+pub(crate) fn cover_to(src: &Img, w: usize, h: usize) -> Img {
     let s = (w as f32 / src.w as f32).max(h as f32 / src.h as f32);
     let (sw, sh) = (((src.w as f32 * s).ceil() as usize).max(w), ((src.h as f32 * s).ceil() as usize).max(h));
     let scaled = src.resize_exact(sw, sh, image::imageops::FilterType::Lanczos3);
@@ -158,7 +209,7 @@ pub fn color_image(img: &Img) -> ColorImage {
 }
 
 impl App {
-    pub fn new(cc: &eframe::CreationContext<'_>, initial: Option<PathBuf>) -> Self {
+    pub fn new(cc: &eframe::CreationContext<'_>, initial: Option<String>) -> Self {
         crate::theme::install(&cc.egui_ctx);
         let (tx, rx) = channel();
         let (ai_tx, ai_rx) = channel();
@@ -207,10 +258,22 @@ impl App {
             work_res: 2048,
             pending_finish_for_render: None,
             recipe_title: None,
+            tray: vec![],
+            current: None,
+            recents: Recents::load(),
+            recent_tex: HashMap::new(),
+            open_sheet: Default::default(),
+            job_photo: HashMap::new(),
+            film_focus: false,
+            switching_to: None,
+            overview: Default::default(),
         };
         app.rescan_clis();
-        if let Some(p) = initial {
-            app.load_photo(p);
+        if let Some(raw) = initial {
+            match sources::classify(&raw) {
+                Ok(input) => app.open(vec![crate::app_open::OpenRequest::Input(input)]),
+                Err(e) => app.toast(format!("Could not open “{raw}”: {e}"), crate::theme::DANGER),
+            }
         }
         app
     }
@@ -235,56 +298,7 @@ impl App {
 
     // ------------------------------------------------------------ photo
 
-    pub fn pick_file(&mut self) {
-        if self.picking {
-            return;
-        }
-        self.picking = true;
-        let tx = self.tx.clone();
-        let ctx = self.ctx.clone();
-        std::thread::spawn(move || {
-            let p = rfd::FileDialog::new()
-                .set_title("Open a photo")
-                .add_filter("Images", &["jpg", "jpeg", "png", "webp", "tif", "tiff", "bmp", "heic", "heif", "avif"])
-                .pick_file();
-            let _ = tx.send(WorkerMsg::FilePicked(p));
-            ctx.request_repaint();
-        });
-    }
-
-    pub fn load_photo(&mut self, path: PathBuf) {
-        self.loading = Some(path.file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or_default());
-        let tx = self.tx.clone();
-        let ctx = self.ctx.clone();
-        let res = self.work_res;
-        std::thread::spawn(move || {
-            let r = photo_io::load_photo(&path).map_err(|e| format!("{e:#}")).map(|rgb| {
-                let orig = [rgb.width(), rgb.height()];
-                let full = Img::from_rgb8(&rgb);
-                let work = full.fit_long(res);
-                let thumb = work.fit_long(THUMB_LONG);
-                let color = color_image(&work);
-                (path, work, thumb, color, orig)
-            });
-            let _ = tx.send(WorkerMsg::PhotoLoaded(r));
-            ctx.request_repaint();
-        });
-    }
-
-    fn on_photo(&mut self, path: PathBuf, work: Img, thumb: Img, color: ColorImage, orig: [u32; 2]) {
-        let tex = self.ctx.load_texture("photo", color, TextureOptions::LINEAR);
-        let name = path.file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or_default();
-        self.photo = Some(Photo { path, name, work: Arc::new(work), thumb: Arc::new(thumb), tex, orig_size: orig });
-        self.artworks.clear();
-        self.selected = None;
-        self.director = None;
-        self.zoom = 1.0;
-        self.pan = Vec2::ZERO;
-        self.render_thumbs();
-        self.render_due = Some(self.now());
-    }
-
-    fn render_thumbs(&mut self) {
+    pub(crate) fn render_thumbs(&mut self) {
         let Some(photo) = &self.photo else { return };
         self.thumb_gen += 1;
         self.thumbs = vec![None; STYLES.len()];
@@ -432,7 +446,8 @@ impl App {
             return;
         }
         let (tx, ctx) = (self.tx.clone(), self.ctx.clone());
-        let stem = format!("{}-{}", photo.path.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default(), a.title);
+        let base = std::path::Path::new(&photo.name).file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
+        let stem = format!("{base}-{}", a.title);
         let finish = a.finish;
         let job: Box<dyn FnOnce() -> anyhow::Result<PathBuf> + Send> = match (a.kind, a.recipe.clone()) {
             (Kind::Algorithm, Some((style, params, seed))) => {
@@ -527,7 +542,7 @@ impl App {
     pub fn run_director(&mut self) {
         let (Some(photo), Some(d)) = (&self.photo, &self.director_role) else { return };
         let job = self.hub.art_director(d, photo.work.clone());
-        self.jobs.push(job);
+        self.track_job(job);
     }
 
     pub fn run_repaint(&mut self, medium: String, brief: String, with_brief: bool) {
@@ -539,14 +554,14 @@ impl App {
             ai::Cli::Claude => "Claude is painting in SVG — usually 1–3 minutes",
         };
         let color = crate::theme::engine_color(job.engine);
-        self.jobs.push(job);
+        self.track_job(job);
         self.toast(msg, color);
     }
 
     pub fn run_vector(&mut self) {
         let (Some(photo), Some(d)) = (&self.photo, &self.director_role) else { return };
         let job = self.hub.vector(d, photo.work.clone(), &ai::VECTOR_STYLES[self.vector_style]);
-        self.jobs.push(job);
+        self.track_job(job);
     }
 
     pub fn run_placard(&mut self) {
@@ -558,7 +573,7 @@ impl App {
         let (id, img) = (a.id, a.display.clone());
         let Some(d) = &self.director_role else { return };
         let job = self.hub.placard(d, id, img, how);
-        self.jobs.push(job);
+        self.track_job(job);
     }
 
     pub fn apply_recipe(&mut self, idx: usize) {
@@ -577,7 +592,7 @@ impl App {
         self.render_due = Some(self.now());
     }
 
-    fn render_recipe_thumbs(&mut self) {
+    pub(crate) fn render_recipe_thumbs(&mut self) {
         let (Some(photo), Some(d)) = (&self.photo, &mut self.director) else { return };
         d.generation += 1;
         let generation = d.generation;
@@ -631,19 +646,43 @@ impl App {
 
     fn on_worker(&mut self, msg: WorkerMsg) {
         match msg {
-            WorkerMsg::FilePicked(p) => {
+            WorkerMsg::FilesPicked(paths) => {
                 self.picking = false;
-                if let Some(p) = p {
-                    self.load_photo(p);
+                let reqs = paths.into_iter().map(|p| crate::app_open::OpenRequest::Input(sources::Input::File(p))).collect();
+                self.open(reqs);
+            }
+            WorkerMsg::PhotoLoaded { batch, result } => match result {
+                // A newer open superseded this one (e.g. rapid navigation): ignore it.
+                Ok(_) if self.loading.as_ref().is_none_or(|l| l.batch != batch) => {}
+                Ok((asset, work, thumb, color, orig)) => self.on_photo(asset, work, thumb, color, orig),
+                Err(e) => {
+                    if self.loading.as_ref().is_some_and(|l| l.batch == batch) {
+                        self.loading = None;
+                    }
+                    self.toast(format!("Could not open photo: {e}"), crate::theme::DANGER)
+                }
+            },
+            WorkerMsg::Acquiring { batch, progress } => {
+                if let Some(l) = self.loading.as_mut().filter(|l| l.batch == batch) {
+                    l.stage = progress.stage;
+                    l.done = progress.done;
+                    l.total = progress.total;
                 }
             }
-            WorkerMsg::PhotoLoaded(r) => {
-                self.loading = None;
-                match r {
-                    Ok((path, work, thumb, color, orig)) => self.on_photo(path, work, thumb, color, orig),
-                    Err(e) => self.toast(format!("Could not open photo: {e}"), crate::theme::DANGER),
+            WorkerMsg::Acquired { asset, thumb, thumb_file } => self.on_acquired(asset, thumb, thumb_file),
+            WorkerMsg::AcquireFailed { error } => {
+                if !error.contains("cancelled") {
+                    self.toast(error, crate::theme::DANGER);
                 }
             }
+            WorkerMsg::AcquireDone { batch } => {
+                if self.loading.as_ref().is_some_and(|l| l.batch == batch) {
+                    self.loading = None;
+                    self.switching_to = None;
+                }
+                self.recents.save();
+            }
+            WorkerMsg::Clipboard(status) => self.open_sheet.clip = status,
             WorkerMsg::Thumb { generation, idx, img } => {
                 if generation == self.thumb_gen {
                     self.thumbs[idx] = Some(self.ctx.load_texture(format!("thumb-{idx}"), img, TextureOptions::LINEAR));
@@ -751,6 +790,15 @@ impl App {
                     return;
                 }
             }
+        }
+        let target = self.job_photo.get(&ev.job_id).copied();
+        if let (Some(t), Ok(_)) = (target, &ev.result)
+            && Some(t) != self.current
+        {
+            if let Ok(out) = ev.result {
+                self.deliver_to_parked(t, out);
+            }
+            return;
         }
         match ev.result {
             Err(e) => {
