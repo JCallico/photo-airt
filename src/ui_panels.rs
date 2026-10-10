@@ -133,16 +133,20 @@ impl App {
             .exact_size(152.0)
             .frame(egui::Frame::new().fill(BG).inner_margin(Margin::symmetric(14, 8)).stroke(Stroke::new(1.0, LINE)))
             .show(ui, |ui| self.collection_bar(ui));
-        egui::Panel::left("left")
-            .default_size(340.0)
-            .size_range(290.0..=480.0)
-            .frame(egui::Frame::new().fill(PANEL).inner_margin(Margin::same(14)))
-            .show(ui, |ui| self.left_panel(ui));
-        egui::Panel::right("right")
-            .default_size(300.0)
-            .size_range(260.0..=420.0)
-            .frame(egui::Frame::new().fill(PANEL).inner_margin(Margin::same(14)))
-            .show(ui, |ui| self.right_panel(ui));
+        // The side panels only make sense for a photo; without one the stage
+        // has the whole width for the welcome screen.
+        if self.photo.is_some() {
+            egui::Panel::left("left")
+                .default_size(340.0)
+                .size_range(290.0..=480.0)
+                .frame(egui::Frame::new().fill(PANEL).inner_margin(Margin::same(14)))
+                .show(ui, |ui| self.left_panel(ui));
+            egui::Panel::right("right")
+                .default_size(300.0)
+                .size_range(260.0..=420.0)
+                .frame(egui::Frame::new().fill(PANEL).inner_margin(Margin::same(14)))
+                .show(ui, |ui| self.right_panel(ui));
+        }
         egui::CentralPanel::no_frame().show(ui, |ui| self.draw_canvas(ui));
         self.open_sheet_ui(&ctx);
         self.photos_overview_ui(&ctx);
@@ -293,10 +297,6 @@ impl App {
     }
 
     fn styles_gallery(&mut self, ui: &mut Ui) {
-        if self.photo.is_none() {
-            ui.add_space(6.0);
-            ui.label(RichText::new("Open a photo to see it in every style.").color(MUTED));
-        }
         let registry = plugins::registry();
         for family in registry.families() {
             ui.add_space(6.0);
@@ -308,7 +308,7 @@ impl App {
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = 10.0;
                     for plugin in chunk {
-                        if self.style_card(ui, plugin.description(), plugin.folder().is_some(), w).clicked() && self.photo.is_some() {
+                        if self.style_card(ui, plugin.description(), plugin.folder().is_some(), w).clicked() {
                             self.select_style(plugin.id());
                         }
                     }
