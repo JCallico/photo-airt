@@ -152,7 +152,7 @@ fn resolve_input(arg: &str) -> anyhow::Result<PathBuf> {
 /// the contract without approving it.
 fn check_plugin(args: &[String]) -> anyhow::Result<()> {
     let dir = PathBuf::from(args.first().ok_or_else(|| anyhow::anyhow!("usage: photo-airt --check-plugin <plug-in folder>"))?);
-    let dir = std::fs::canonicalize(&dir).map_err(|e| anyhow::anyhow!("{}: {e}", dir.display()))?;
+    let dir = photo_io::canonicalize(&dir).map_err(|e| anyhow::anyhow!("{}: {e}", dir.display()))?;
     println!("Checking {}", dir.display());
     let (report, ok) = plugins::external::check(&dir);
     for (passed, line) in &report {

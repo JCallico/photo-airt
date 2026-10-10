@@ -154,6 +154,10 @@ impl App {
     // ------------------------------------------------------------ top bar
 
     fn top_bar(&mut self, ui: &mut Ui) {
+        // Narrow windows shorten or drop the least important items rather
+        // than letting the two sides of the bar overlap.
+        let width = ui.available_width();
+        let compact = width < 1400.0;
         ui.horizontal_centered(|ui| {
             let (r, _) = ui.allocate_exact_size(vec2(26.0, 26.0), Sense::hover());
             let p = ui.painter();
@@ -162,16 +166,12 @@ impl App {
             p.circle_filled(r.center() + vec2(5.0, 3.0), 7.0, CODEX.gamma_multiply(0.8));
             p.circle_filled(r.center() + vec2(0.0, -5.0), 7.0, CLAUDE.gamma_multiply(0.8));
             ui.label(theme::title_italic("Photo·AIrt", 24.0));
-            ui.label(RichText::new("studio").size(11.0).color(FAINT));
+            if width >= 1200.0 {
+                ui.label(RichText::new("studio").size(11.0).color(FAINT));
+            }
             ui.add_space(14.0);
             if ui.button("📂  Open").on_hover_text("Open from files, a link or the clipboard (Ctrl+O)").clicked() {
                 self.show_open_sheet();
-            }
-            if let Some(ph) = &self.photo {
-                let o = &ph.asset.origin;
-                theme::pill(ui, MUTED, &format!("{} {}", o.icon(), o.label())).on_hover_text(o.location());
-                ui.label(RichText::new(ph.name.chars().take(48).collect::<String>()).color(TEXT).size(12.5));
-                ui.label(RichText::new(format!("{} × {}", ph.orig_size[0], ph.orig_size[1])).color(FAINT).size(11.5));
             }
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 let can_export = self.selected_artwork().is_some();
@@ -198,15 +198,21 @@ impl App {
                     self.rescan_plugins();
                 }
                 ui.add_space(10.0);
-                let status = |s: &Option<ai::CliStatus>, name: &str| match s {
-                    None => (FAINT, format!("{name} …")),
-                    Some(c) if c.found => (Color32::from_rgb(110, 210, 120), format!("{name} {}", c.version)),
-                    Some(_) => (DANGER, format!("{name} not found")),
+                // Compact pills keep only the name; the tooltip has the details.
+                let status = |s: &Option<ai::CliStatus>, name: &str| {
+                    let (color, detail) = match s {
+                        None => (FAINT, "…".to_string()),
+                        Some(c) if c.found => (Color32::from_rgb(110, 210, 120), c.version.clone()),
+                        Some(_) => (DANGER, "not found".to_string()),
+                    };
+                    let text = if compact { name.to_string() } else { format!("{name} {detail}") };
+                    (color, text, format!("{name} {detail}"))
                 };
-                let (dc, tc) = status(&self.codex, "Codex");
-                theme::pill(ui, dc, &tc).on_hover_text("Codex CLI — generative repainting via its image generation tool");
-                let (dc, tc) = status(&self.claude, "Claude");
-                theme::pill(ui, dc, &tc).on_hover_text("Claude Code CLI — art direction, vector art, wall labels");
+                let (dc, tc, detail) = status(&self.codex, "Codex");
+                theme::pill(ui, dc, &tc)
+                    .on_hover_text(format!("{detail}\nCodex CLI — generative repainting via its image generation tool"));
+                let (dc, tc, detail) = status(&self.claude, "Claude");
+                theme::pill(ui, dc, &tc).on_hover_text(format!("{detail}\nClaude Code CLI — art direction, vector art, wall labels"));
                 ui.add_space(14.0);
                 // View switcher (right-to-left, so reversed).
                 for (v, name, key) in [
@@ -218,6 +224,33 @@ impl App {
                     if theme::chip(ui, name, self.view == v, GOLD).on_hover_text(format!("Key {key}")).clicked() {
                         self.view = v;
                     }
+                }
+                // The photo's origin, name and size get whatever room is left.
+                ui.add_space(12.0);
+                let room = ui.available_width();
+                if let Some(ph) = &self.photo
+                    && room > 60.0
+                {
+                    let h = ui.available_height();
+                    ui.allocate_ui_with_layout(vec2(room, h), Layout::left_to_right(Align::Center), |ui| {
+                        let o = &ph.asset.origin;
+                        if room > 260.0 {
+                            theme::pill(ui, MUTED, &format!("{} {}", o.icon(), o.label())).on_hover_text(o.location());
+                        }
+                        let size = RichText::new(format!("{} × {}", ph.orig_size[0], ph.orig_size[1])).color(FAINT).size(11.5);
+                        let size_w =
+                            ui.fonts_mut(|f| f.layout_no_wrap(size.text().to_string(), FontId::proportional(11.5), FAINT).size().x);
+                        let show_size = room > 360.0;
+                        let name_w = ui.available_width() - if show_size { size_w + ui.spacing().item_spacing.x } else { 0.0 };
+                        ui.scope(|ui| {
+                            ui.set_max_width(name_w.max(0.0));
+                            let name = RichText::new(ph.name.chars().take(48).collect::<String>()).color(TEXT).size(12.5);
+                            ui.add(egui::Label::new(name).truncate()).on_hover_text(&ph.name);
+                        });
+                        if show_size {
+                            ui.label(size);
+                        }
+                    });
                 }
             });
         });
@@ -714,8 +747,11 @@ impl App {
     // ------------------------------------------------------------ right
 
     fn right_panel(&mut self, ui: &mut Ui) {
-        egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-            let sel_kind = self.selected_artwork().map(|a| a.kind);
+        // One scroll position per style, so a newly chosen style starts at
+        // the top instead of wherever the previous one was scrolled to.
+        let sel_kind = self.selected_artwork().map(|a| a.kind);
+        let scroll_key = if matches!(sel_kind, Some(Kind::Ai(_))) { "ai".to_string() } else { self.style_id.clone() };
+        egui::ScrollArea::vertical().id_salt(("atelier", scroll_key)).auto_shrink([false, false]).show(ui, |ui| {
             ui.label(theme::label_caps("Atelier"));
             match sel_kind {
                 Some(Kind::Ai(engine)) => self.ai_details(ui, engine),

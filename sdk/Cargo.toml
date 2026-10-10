@@ -1,6 +1,6 @@
 [package]
 name = "photo-airt-sdk"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2024"
 description = "Shared imaging primitives and the style plug-in contract for Photo·AIrt"
 license = "MIT"

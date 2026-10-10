@@ -2909,7 +2909,7 @@ dependencies = [
 
 [[package]]
 name = "photo-airt"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "anyhow",
  "arboard",
@@ -2945,7 +2945,7 @@ dependencies = [
 
 [[package]]
 name = "photo-airt-brush"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "photo-airt-sdk",
  "rayon",
@@ -2953,7 +2953,7 @@ dependencies = [
 
 [[package]]
 name = "photo-airt-flow"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "photo-airt-sdk",
  "rayon",
@@ -2961,21 +2961,21 @@ dependencies = [
 
 [[package]]
 name = "photo-airt-halftone"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "photo-airt-sdk",
 ]
 
 [[package]]
 name = "photo-airt-ink"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "photo-airt-sdk",
 ]
 
 [[package]]
 name = "photo-airt-lowpoly"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "delaunator",
  "photo-airt-sdk",
@@ -2984,7 +2984,7 @@ dependencies = [
 
 [[package]]
 name = "photo-airt-oil"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "photo-airt-sdk",
  "rayon",
@@ -2992,7 +2992,7 @@ dependencies = [
 
 [[package]]
 name = "photo-airt-pencil"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "photo-airt-sdk",
  "rayon",
@@ -3000,7 +3000,7 @@ dependencies = [
 
 [[package]]
 name = "photo-airt-pixel"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "photo-airt-sdk",
  "rayon",
@@ -3008,21 +3008,21 @@ dependencies = [
 
 [[package]]
 name = "photo-airt-pointillism"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "photo-airt-sdk",
 ]
 
 [[package]]
 name = "photo-airt-popart"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "photo-airt-sdk",
 ]
 
 [[package]]
 name = "photo-airt-riso"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "photo-airt-sdk",
  "rayon",
@@ -3030,7 +3030,7 @@ dependencies = [
 
 [[package]]
 name = "photo-airt-sdk"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "image",
  "rayon",
@@ -3041,7 +3041,7 @@ dependencies = [
 
 [[package]]
 name = "photo-airt-stained-glass"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "photo-airt-sdk",
  "rayon",
@@ -3049,14 +3049,14 @@ dependencies = [
 
 [[package]]
 name = "photo-airt-toon"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "photo-airt-sdk",
 ]
 
 [[package]]
 name = "photo-airt-watercolor"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "photo-airt-sdk",
  "rayon",
