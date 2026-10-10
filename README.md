@@ -9,6 +9,14 @@ API keys: each AI feature appears only when its CLI is found on `PATH`.
 
 ## Getting started
 
+Download the executable archive for your OS from
+[GitHub Releases](https://github.com/JCallico/photo-airt/releases), extract it,
+and run `photo-airt` (`photo-airt.exe` on Windows). Linux and Windows downloads
+are for x64; macOS has separate Apple Silicon and Intel downloads. The
+prebuilt executable does not need Rust.
+
+To build from source:
+
 You need a Rust toolchain (pinned in `mise.toml`, or any recent stable Rust).
 The AI features also need either or both of
 [Claude Code](https://claude.com/claude-code) and
@@ -19,6 +27,11 @@ git clone https://github.com/JCallico/photo-airt.git
 cd photo-airt
 cargo run --release -- path/to/photo.jpg   # a path or a link; or start empty and press Ctrl+O
 ```
+
+Local paths may be absolute or relative to the current directory. An existing
+local file takes precedence over a bare website address; prefix a relative
+path with `./` (or `.\` on Windows) to identify it as a file even if it is
+missing. Explicit `https://` links always open from the web.
 
 On Linux, the native file dialog uses the XDG desktop portal. HEIC files are
 decoded through ImageMagick, libvips or `heif-convert` when one of them is
@@ -130,10 +143,47 @@ animation reveals each new result.
 | Stained Glass, Low Poly, Pop Art Quad | Jump-flood Voronoi with chamfer-distance lead lines, Delaunay facets, posterised palettes |
 | CMYK Halftone, Risograph, Pixel Art | Rotated AM screens, least-squares two-ink separation, k-means++ palette with Bayer dithering |
 
-Each style's parameters appear as sliders in the **Atelier** panel. Every
+Each style's settings appear as controls in the **Atelier** panel. Every
 artwork, including AI results, also gets a non-destructive **Finish** layer:
 exposure, contrast, saturation, warmth, vignette, grain, canvas weave and
 glow.
+
+## Plug-in styles
+
+Add your own painting styles with **plug-ins**: small programs in any
+language. A plug-in's `plugin.toml` describes it (name, gallery group,
+description and settings), and Photo·AIrt turns its settings into sliders,
+toggles and drop-downs in the Atelier panel. Plug-in styles get live
+previews, the finish layer, export and Art Director recipes, just like the
+built-in ones. The 14 built-in styles use the same plug-in interface, compiled
+into the single executable, so the app works out of the box with nothing to
+install. Each one lives in its own folder under [`plugins/`](plugins), laid
+out like an external plug-in. Build its executable into the folder, move the
+folder to a plug-ins location, and it loads as an external plug-in.
+
+![The Plug-ins panel: where plug-ins are looked for, and each plug-in's status](docs/screenshots/plugins.jpg)
+
+- **Where plug-ins live:** a plug-in is a folder with a `plugin.toml`. The app
+  looks in folders listed in `PHOTO_AIRT_PLUGINS`, then your plug-ins folder
+  (for example `~/.local/share/photo-airt/plugins/` on Linux), then a
+  `plugins/` folder next to the executable.
+- **Approval:** a plug-in is a program that runs with your permissions, so it
+  never runs until you approve it in the **Plug-ins** panel. The approval is
+  pinned to a checksum of the plug-in's files, so any change needs approving
+  again.
+- **How rendering works:** each render is one short-lived process. The app
+  writes `input.png` and `request.json` to a temporary folder, the plug-in
+  writes `output.png`, and progress and errors arrive as JSON lines.
+- **For authors:** see [docs/plugins.md](docs/plugins.md) for the full
+  contract and requirements. Two complete examples, each using only its
+  standard library, live in [`examples/plugins`](examples/plugins):
+  - **Retro Print** (Python) shows all three setting types.
+  - **Copperplate Engraving** (Node.js) adds a style the app doesn't have:
+    banknote-style line engraving that uses `scale` and `seed`.
+
+  To load them in the app from a checkout:
+  `PHOTO_AIRT_PLUGINS=examples/plugins cargo run --release`, then approve
+  them in the Plug-ins panel.
 
 ## AI studio: Art Director and Master Painter
 
@@ -232,20 +282,29 @@ PHOTO_AIRT_DIRECTOR=codex:gpt-5.6-luna PHOTO_AIRT_PAINTER=claude:sonnet \
 
 Every input above can be a path or a link.
 
+Plug-in tools:
+
+```bash
+photo-airt --plugins                                # where plug-ins are looked for, and what was found
+photo-airt --check-plugin path/to/my-plugin         # validate a plug-in against the contract
+photo-airt --run-plugin oil render request.json     # render a built-in style through the plug-in contract
+```
+
 ## Development
 
 ```bash
-cargo test --release
-cargo clippy --release --all-targets -- -D warnings
-cargo fmt --check
-RUSTDOCFLAGS="-D warnings" cargo doc --no-deps
+cargo test --release --workspace
+cargo clippy --release --workspace --all-targets -- -D warnings
+cargo fmt --all --check
+RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --workspace
 cargo deny check   # advisories, licenses, bans, sources (deny.toml)
 ```
 
 CI runs these checks on every pull request:
 
 - lint (rustfmt, clippy, rustdoc and whitespace);
-- build and tests on Linux, macOS and Windows;
+- build and tests on Linux, macOS and Windows, including the example
+  plug-ins and every built-in style run as an external plug-in;
 - the `cargo-deny` policy;
 - GitHub dependency review.
 
@@ -253,6 +312,8 @@ The `cargo-deny` policy also runs weekly, so new RustSec advisories surface
 even when the code hasn't changed.
 
 Planned features are tracked in [BACKLOG.md](BACKLOG.md).
+Release builds, downloads and publication are documented in
+[docs/releases.md](docs/releases.md).
 Changes to `main` go through pull requests, and the same checks run in CI.
 Contributor and agent guidelines are in [AGENTS.md](AGENTS.md). To report a
 security issue, follow [SECURITY.md](SECURITY.md).

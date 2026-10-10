@@ -5,7 +5,7 @@ use egui::{Align, Align2, Color32, CornerRadius, FontId, Layout, Margin, Rect, R
 
 use crate::ai::{self, JobStatus};
 use crate::app::{App, Kind, LeftTab, View};
-use crate::styles::{Family, STYLES};
+use crate::plugins::{self, SettingKind, Value};
 use crate::theme::{self, *};
 use crate::ui_canvas::kind_color;
 
@@ -146,6 +146,7 @@ impl App {
         egui::CentralPanel::no_frame().show(ui, |ui| self.draw_canvas(ui));
         self.open_sheet_ui(&ctx);
         self.photos_overview_ui(&ctx);
+        self.plugins_panel_ui(&ctx);
         self.toasts_ui(&ctx);
         self.drop_overlay(&ctx);
     }
@@ -153,6 +154,10 @@ impl App {
     // ------------------------------------------------------------ top bar
 
     fn top_bar(&mut self, ui: &mut Ui) {
+        // Narrow windows shorten or drop the least important items rather
+        // than letting the two sides of the bar overlap.
+        let width = ui.available_width();
+        let compact = width < 1400.0;
         ui.horizontal_centered(|ui| {
             let (r, _) = ui.allocate_exact_size(vec2(26.0, 26.0), Sense::hover());
             let p = ui.painter();
@@ -161,16 +166,12 @@ impl App {
             p.circle_filled(r.center() + vec2(5.0, 3.0), 7.0, CODEX.gamma_multiply(0.8));
             p.circle_filled(r.center() + vec2(0.0, -5.0), 7.0, CLAUDE.gamma_multiply(0.8));
             ui.label(theme::title_italic("Photo·AIrt", 24.0));
-            ui.label(RichText::new("studio").size(11.0).color(FAINT));
+            if width >= 1200.0 {
+                ui.label(RichText::new("studio").size(11.0).color(FAINT));
+            }
             ui.add_space(14.0);
             if ui.button("📂  Open").on_hover_text("Open from files, a link or the clipboard (Ctrl+O)").clicked() {
                 self.show_open_sheet();
-            }
-            if let Some(ph) = &self.photo {
-                let o = &ph.asset.origin;
-                theme::pill(ui, MUTED, &format!("{} {}", o.icon(), o.label())).on_hover_text(o.location());
-                ui.label(RichText::new(ph.name.chars().take(48).collect::<String>()).color(TEXT).size(12.5));
-                ui.label(RichText::new(format!("{} × {}", ph.orig_size[0], ph.orig_size[1])).color(FAINT).size(11.5));
             }
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 let can_export = self.selected_artwork().is_some();
@@ -189,16 +190,29 @@ impl App {
                 if ui.button("🗁").on_hover_text("Open the output folder").clicked() {
                     self.open_output_folder();
                 }
+                let pending = self.plugin_scan.as_ref().map(|s| s.needing_approval()).unwrap_or(0);
+                let label = if pending > 0 { format!("Plug-ins · {pending}") } else { "Plug-ins".to_string() };
+                let button = egui::Button::new(RichText::new(label).color(if pending > 0 { GOLD } else { TEXT }));
+                if ui.add(button).on_hover_text("Manage plug-in styles").clicked() {
+                    self.plugins_open = true;
+                    self.rescan_plugins();
+                }
                 ui.add_space(10.0);
-                let status = |s: &Option<ai::CliStatus>, name: &str| match s {
-                    None => (FAINT, format!("{name} …")),
-                    Some(c) if c.found => (Color32::from_rgb(110, 210, 120), format!("{name} {}", c.version)),
-                    Some(_) => (DANGER, format!("{name} not found")),
+                // Compact pills keep only the name; the tooltip has the details.
+                let status = |s: &Option<ai::CliStatus>, name: &str| {
+                    let (color, detail) = match s {
+                        None => (FAINT, "…".to_string()),
+                        Some(c) if c.found => (Color32::from_rgb(110, 210, 120), c.version.clone()),
+                        Some(_) => (DANGER, "not found".to_string()),
+                    };
+                    let text = if compact { name.to_string() } else { format!("{name} {detail}") };
+                    (color, text, format!("{name} {detail}"))
                 };
-                let (dc, tc) = status(&self.codex, "Codex");
-                theme::pill(ui, dc, &tc).on_hover_text("Codex CLI — generative repainting via its image generation tool");
-                let (dc, tc) = status(&self.claude, "Claude");
-                theme::pill(ui, dc, &tc).on_hover_text("Claude Code CLI — art direction, vector art, wall labels");
+                let (dc, tc, detail) = status(&self.codex, "Codex");
+                theme::pill(ui, dc, &tc)
+                    .on_hover_text(format!("{detail}\nCodex CLI — generative repainting via its image generation tool"));
+                let (dc, tc, detail) = status(&self.claude, "Claude");
+                theme::pill(ui, dc, &tc).on_hover_text(format!("{detail}\nClaude Code CLI — art direction, vector art, wall labels"));
                 ui.add_space(14.0);
                 // View switcher (right-to-left, so reversed).
                 for (v, name, key) in [
@@ -210,6 +224,33 @@ impl App {
                     if theme::chip(ui, name, self.view == v, GOLD).on_hover_text(format!("Key {key}")).clicked() {
                         self.view = v;
                     }
+                }
+                // The photo's origin, name and size get whatever room is left.
+                ui.add_space(12.0);
+                let room = ui.available_width();
+                if let Some(ph) = &self.photo
+                    && room > 60.0
+                {
+                    let h = ui.available_height();
+                    ui.allocate_ui_with_layout(vec2(room, h), Layout::left_to_right(Align::Center), |ui| {
+                        let o = &ph.asset.origin;
+                        if room > 260.0 {
+                            theme::pill(ui, MUTED, &format!("{} {}", o.icon(), o.label())).on_hover_text(o.location());
+                        }
+                        let size = RichText::new(format!("{} × {}", ph.orig_size[0], ph.orig_size[1])).color(FAINT).size(11.5);
+                        let size_w =
+                            ui.fonts_mut(|f| f.layout_no_wrap(size.text().to_string(), FontId::proportional(11.5), FAINT).size().x);
+                        let show_size = room > 360.0;
+                        let name_w = ui.available_width() - if show_size { size_w + ui.spacing().item_spacing.x } else { 0.0 };
+                        ui.scope(|ui| {
+                            ui.set_max_width(name_w.max(0.0));
+                            let name = RichText::new(ph.name.chars().take(48).collect::<String>()).color(TEXT).size(12.5);
+                            ui.add(egui::Label::new(name).truncate()).on_hover_text(&ph.name);
+                        });
+                        if show_size {
+                            ui.label(size);
+                        }
+                    });
                 }
             });
         });
@@ -256,31 +297,50 @@ impl App {
             ui.add_space(6.0);
             ui.label(RichText::new("Open a photo to see it in every style.").color(MUTED));
         }
-        for fam in Family::ALL {
+        let registry = plugins::registry();
+        for family in registry.families() {
             ui.add_space(6.0);
-            ui.label(theme::label_caps(fam.label()));
+            ui.label(theme::label_caps(&family));
             ui.add_space(2.0);
-            let idxs: Vec<usize> = (0..STYLES.len()).filter(|&i| STYLES[i].family == fam).collect();
+            let members: Vec<_> = registry.all().iter().filter(|p| p.description().family == family).cloned().collect();
             let w = ((ui.available_width() - 10.0) / 2.0).floor();
-            for chunk in idxs.chunks(2) {
+            for chunk in members.chunks(2) {
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = 10.0;
-                    for &i in chunk {
-                        if self.style_card(ui, i, w).clicked() && self.photo.is_some() {
-                            self.select_style(i);
+                    for plugin in chunk {
+                        if self.style_card(ui, plugin.description(), plugin.folder().is_some(), w).clicked() && self.photo.is_some() {
+                            self.select_style(plugin.id());
                         }
                     }
                 });
                 ui.add_space(4.0);
             }
         }
+        // Plug-ins footer.
+        ui.add_space(10.0);
+        let external = registry.all().iter().filter(|p| p.folder().is_some()).count();
+        let pending = self.plugin_scan.as_ref().map(|s| s.needing_approval()).unwrap_or(0);
+        ui.horizontal_wrapped(|ui| {
+            let mut text = format!("{} built-in styles", registry.all().len() - external);
+            if external > 0 {
+                text.push_str(&format!(" · {external} from plug-ins"));
+            }
+            if pending > 0 {
+                text.push_str(&format!(" · {pending} awaiting approval"));
+            }
+            ui.label(RichText::new(text).size(11.5).color(FAINT));
+            if ui.link(RichText::new("Manage plug-ins…").size(11.5).color(GOLD)).clicked() {
+                self.plugins_open = true;
+                self.rescan_plugins();
+            }
+        });
     }
 
-    fn style_card(&mut self, ui: &mut Ui, idx: usize, w: f32) -> egui::Response {
+    fn style_card(&mut self, ui: &mut Ui, desc: &plugins::Description, external: bool, w: f32) -> egui::Response {
         let ih = (w * 0.7).round();
         let (rect, resp) = ui.allocate_exact_size(vec2(w, ih + 28.0), Sense::click());
         let hov = ui.ctx().animate_bool(resp.id, resp.hovered());
-        let sel = idx == self.style_idx && self.selected_artwork().is_some_and(|a| a.kind == Kind::Algorithm);
+        let sel = desc.id == self.style_id && self.selected_artwork().is_some_and(|a| a.kind == Kind::Algorithm);
         let lift = vec2(0.0, -2.0 * hov);
         let rect = rect.translate(lift);
         let p = ui.painter().clone();
@@ -298,7 +358,7 @@ impl App {
         p.rect_filled(rect, CornerRadius::same(10), CARD);
         let img_r = Rect::from_min_size(rect.min, vec2(w, ih));
         let top_round = CornerRadius { nw: 10, ne: 10, sw: 0, se: 0 };
-        match &self.thumbs[idx] {
+        match self.thumbs.get(&desc.id) {
             Some(tex) => {
                 egui::Image::new(tex).uv(cover_uv(tex.size(), w, ih)).corner_radius(top_round).paint_at(ui, img_r);
             }
@@ -307,20 +367,25 @@ impl App {
         p.text(
             pos2(rect.left() + 10.0, rect.bottom() - 14.0),
             Align2::LEFT_CENTER,
-            STYLES[idx].name,
+            &desc.name,
             FontId::proportional(12.5),
             if sel { Color32::WHITE } else { TEXT },
         );
         let stroke =
             if sel { Stroke::new(2.0, GOLD) } else { Stroke::new(1.0, theme::lerp_color(LINE, Color32::from_rgb(110, 100, 110), hov)) };
         p.rect_stroke(rect, CornerRadius::same(10), stroke, egui::StrokeKind::Inside);
-        if self.render.as_ref().is_some_and(|r| r.style == idx) {
+        if external {
+            let b = Rect::from_min_size(img_r.left_top() + vec2(6.0, 6.0), vec2(52.0, 16.0));
+            p.rect_filled(b, CornerRadius::same(8), Color32::from_black_alpha(200));
+            p.text(b.center(), Align2::CENTER_CENTER, "PLUG-IN", FontId::proportional(9.0), CODEX);
+        }
+        if self.render.as_ref().is_some_and(|r| r.style == desc.id) {
             let c = pos2(img_r.right() - 16.0, img_r.top() + 16.0);
             p.circle_filled(c, 12.0, Color32::from_black_alpha(170));
             let a = ui.input(|i| i.time) as f32 * 5.0;
             p.circle_filled(c + vec2(a.cos(), a.sin()) * 6.0, 2.5, GOLD);
         }
-        resp.on_hover_text(STYLES[idx].blurb).on_hover_cursor(egui::CursorIcon::PointingHand)
+        resp.on_hover_text(&desc.blurb).on_hover_cursor(egui::CursorIcon::PointingHand)
     }
 
     // ------------------------------------------------------------ AI studio
@@ -392,7 +457,7 @@ impl App {
                             }
                             ui.vertical(|ui| {
                                 ui.label(RichText::new(&r.name).strong());
-                                let sname = crate::styles::style_index(&r.style).map(|s| STYLES[s].name).unwrap_or(&r.style);
+                                let sname = plugins::registry().get(&r.style).map(|p| p.description().name.clone()).unwrap_or_else(|| r.style.clone());
                                 ui.label(RichText::new(sname).size(11.0).color(GOLD));
                                 ui.label(RichText::new(&r.why).size(11.0).color(MUTED));
                                 if ui.small_button("Apply recipe").clicked() {
@@ -682,8 +747,11 @@ impl App {
     // ------------------------------------------------------------ right
 
     fn right_panel(&mut self, ui: &mut Ui) {
-        egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-            let sel_kind = self.selected_artwork().map(|a| a.kind);
+        // One scroll position per style, so a newly chosen style starts at
+        // the top instead of wherever the previous one was scrolled to.
+        let sel_kind = self.selected_artwork().map(|a| a.kind);
+        let scroll_key = if matches!(sel_kind, Some(Kind::Ai(_))) { "ai".to_string() } else { self.style_id.clone() };
+        egui::ScrollArea::vertical().id_salt(("atelier", scroll_key)).auto_shrink([false, false]).show(ui, |ui| {
             ui.label(theme::label_caps("Atelier"));
             match sel_kind {
                 Some(Kind::Ai(engine)) => self.ai_details(ui, engine),
@@ -713,28 +781,60 @@ impl App {
         });
     }
 
+    /// The Atelier controls for the selected style, built from the settings
+    /// the style describes (decision D4).
     fn style_controls(&mut self, ui: &mut Ui) {
-        let idx = self.style_idx;
-        let st = &STYLES[idx];
-        ui.label(theme::title(st.name, 25.0));
-        ui.label(RichText::new(st.blurb).color(MUTED).size(12.5));
+        let id = self.style_id.clone();
+        let Some(plugin) = plugins::registry().get(&id).cloned() else {
+            ui.label(RichText::new(format!("The style “{id}” is not available.")).color(DANGER));
+            return;
+        };
+        let st = plugin.description();
+        ui.label(theme::title(&st.name, 25.0));
+        ui.label(RichText::new(&st.blurb).color(MUTED).size(12.5));
         egui::CollapsingHeader::new(RichText::new("How it works").size(12.0).color(GOLD)).id_salt("how").show(ui, |ui| {
-            ui.label(RichText::new(st.technique).italics().size(11.5).color(MUTED));
+            ui.label(RichText::new(&st.technique).italics().size(11.5).color(MUTED));
         });
         ui.add_space(4.0);
         let mut changed = false;
         let slider_w = ui.available_width() - 64.0;
-        for spec in st.params {
-            ui.label(RichText::new(spec.label).size(12.0).color(MUTED));
-            let v = self.params[idx].0.get_mut(spec.key).expect("param");
-            ui.spacing_mut().slider_width = slider_w;
-            let mut s = egui::Slider::new(v, spec.min..=spec.max);
-            if spec.step >= 1.0 {
-                s = s.step_by(spec.step as f64).fixed_decimals(0);
-            } else {
-                s = s.step_by(spec.step as f64);
+        let params = self.params_for(&id);
+        for setting in &st.settings {
+            let Some(value) = params.0.get_mut(&setting.key) else { continue };
+            match (&setting.kind, value) {
+                (SettingKind::Number { min, max, step }, Value::Number(v)) => {
+                    ui.label(RichText::new(&setting.label).size(12.0).color(MUTED));
+                    ui.spacing_mut().slider_width = slider_w;
+                    let mut s = egui::Slider::new(v, *min..=*max);
+                    if *step >= 1.0 {
+                        s = s.step_by(*step as f64).fixed_decimals(0);
+                    } else if *step > 0.0 {
+                        s = s.step_by(*step as f64);
+                    }
+                    let r = ui.add(s);
+                    changed |= r.changed();
+                    if let Some(help) = &setting.help {
+                        r.on_hover_text(help);
+                    }
+                }
+                (SettingKind::Toggle, Value::Bool(b)) => {
+                    let r = ui.checkbox(b, RichText::new(&setting.label).size(12.5));
+                    changed |= r.changed();
+                    if let Some(help) = &setting.help {
+                        r.on_hover_text(help);
+                    }
+                }
+                (SettingKind::Choice { options }, Value::Text(t)) => {
+                    ui.label(RichText::new(&setting.label).size(12.0).color(MUTED));
+                    let shown = options.iter().find(|o| &o.value == t).map(|o| o.label.clone()).unwrap_or_else(|| t.clone());
+                    egui::ComboBox::from_id_salt(("setting", &setting.key)).selected_text(shown).width(slider_w + 54.0).show_ui(ui, |ui| {
+                        for o in options {
+                            changed |= ui.selectable_value(t, o.value.clone(), &o.label).changed();
+                        }
+                    });
+                }
+                _ => {}
             }
-            changed |= ui.add(s).changed();
         }
         if changed {
             self.params_changed();
@@ -745,7 +845,7 @@ impl App {
                 self.reroll();
             }
             if ui.button("↺  Defaults").clicked() {
-                self.params[idx] = crate::styles::Params::defaults(st);
+                self.params.insert(id.clone(), crate::plugins::Params::defaults(st));
                 self.params_changed();
             }
             ui.label(RichText::new(format!("seed {}", self.seed % 100000)).size(11.0).color(FAINT));

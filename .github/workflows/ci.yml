@@ -51,13 +51,13 @@ jobs:
           restore-keys: lint-${{ runner.os }}-
 
       - name: Format
-        run: cargo fmt --check
+        run: cargo fmt --all --check
 
       - name: Clippy
-        run: cargo clippy --release --all-targets --locked -- -D warnings
+        run: cargo clippy --release --workspace --all-targets --locked -- -D warnings
 
       - name: Docs
-        run: cargo doc --no-deps --locked
+        run: cargo doc --no-deps --workspace --locked
         env:
           RUSTDOCFLAGS: -D warnings
 
@@ -101,7 +101,29 @@ jobs:
         run: cargo build --release --locked
 
       - name: Test
-        run: cargo test --release --locked
+        run: cargo test --release --workspace --locked
+
+      - name: Example plug-ins pass the contract checks
+        run: |
+          cargo run --release --locked -- --check-plugin examples/plugins/retro-print
+          cargo run --release --locked -- --check-plugin examples/plugins/copperplate
+
+      # Each built-in style folder, with its standalone executable in bin/,
+      # must also work as an external plug-in once moved out of the repository.
+      - name: Built-in styles pass the contract checks as external plug-ins
+        shell: bash
+        run: |
+          cargo build --release --locked --workspace --bins
+          exe=""
+          if [ "$RUNNER_OS" = "Windows" ]; then exe=".exe"; fi
+          for dir in plugins/*/; do
+            id=$(basename "$dir")
+            moved="$RUNNER_TEMP/moved-plugins/$id"
+            mkdir -p "$moved/bin"
+            cp -r "$dir". "$moved/"
+            cp "target/release/$id$exe" "$moved/bin/"
+            "target/release/photo-airt$exe" --check-plugin "$moved"
+          done
 
   dependencies:
     name: Dependency policy

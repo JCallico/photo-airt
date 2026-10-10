@@ -2,7 +2,13 @@
 //! fast blurs, structure-tensor flow fields, line integral convolution,
 //! distance transforms, noise and a tiny deterministic RNG.
 
+use std::sync::atomic::{AtomicUsize, Ordering};
+
 use rayon::prelude::*;
+
+pub use image::imageops::FilterType;
+
+use crate::Ctx;
 
 pub type Rgb = [f32; 3];
 
@@ -611,4 +617,156 @@ pub fn stamp_disc(img: &mut Img, cx: f32, cy: f32, r: f32, color: Rgb, alpha: f3
             }
         }
     }
+}
+
+// ------------------------------------------------------------------ shared style filters
+
+/// Anisotropic Kuwahara filter with polynomial weighting functions
+/// (Kyprianidis, Semmo, Kang & Döllner 2010). `p0..p1` is the progress span.
+#[allow(clippy::too_many_arguments)]
+pub fn akf(src: &Img, flow: &[Flow], radius: f32, q: f32, alpha: f32, ctx: &Ctx, p0: f32, p1: f32) -> Option<Img> {
+    let (w, h) = (src.w, src.h);
+    let zero_cross = 3.0 * std::f32::consts::PI / 8.0;
+    let zeta = 2.0 / radius.max(1.0);
+    let eta = (zeta + zero_cross.cos()) / zero_cross.sin().powi(2);
+    let hardness = 8000.0f32;
+    let done = AtomicUsize::new(0);
+    let mut out = vec![[0.0f32; 3]; w * h];
+
+    out.par_chunks_mut(w).enumerate().for_each(|(y, row)| {
+        if ctx.cancelled() {
+            return;
+        }
+        for (x, o) in row.iter_mut().enumerate() {
+            let f = flow[y * w + x];
+            let (cos_p, sin_p, an) = (f[0], f[1], f[2]);
+            let a = radius * ((alpha + an) / alpha).clamp(0.1, 2.0);
+            let b = radius * (alpha / (alpha + an)).clamp(0.1, 2.0);
+            let max_x = (a * a * cos_p * cos_p + b * b * sin_p * sin_p).sqrt().ceil() as isize;
+            let max_y = (a * a * sin_p * sin_p + b * b * cos_p * cos_p).sqrt().ceil() as isize;
+            let (sa, sb) = (0.5 / a, 0.5 / b);
+            // Large kernels are sampled on a sparser lattice: same look, ~4x faster.
+            let stride = if radius > 4.5 { 2 } else { 1 };
+            let (max_x, max_y) = (max_x / stride * stride, max_y / stride * stride);
+
+            let mut m = [[0.0f32; 4]; 8];
+            let mut s = [[0.0f32; 3]; 8];
+            for j in (-max_y..=max_y).step_by(stride as usize) {
+                for i in (-max_x..=max_x).step_by(stride as usize) {
+                    let (fi, fj) = (i as f32, j as f32);
+                    let vx = (cos_p * fi + sin_p * fj) * sa;
+                    let vy = (-sin_p * fi + cos_p * fj) * sb;
+                    let vv = vx * vx + vy * vy;
+                    if vv > 0.25 {
+                        continue;
+                    }
+                    let c = src.get(x as isize + i, y as isize + j);
+                    let mut wk = [0.0f32; 8];
+                    let mut sum = 0.0;
+                    let mut sector = |vx: f32, vy: f32, base: usize| {
+                        let vxx = zeta - eta * vx * vx;
+                        let vyy = zeta - eta * vy * vy;
+                        let z = (vy + vxx).max(0.0);
+                        wk[base] = z * z;
+                        let z = (-vx + vyy).max(0.0);
+                        wk[base + 2] = z * z;
+                        let z = (-vy + vxx).max(0.0);
+                        wk[base + 4] = z * z;
+                        let z = (vx + vyy).max(0.0);
+                        wk[base + 6] = z * z;
+                        sum += wk[base] + wk[base + 2] + wk[base + 4] + wk[base + 6];
+                    };
+                    sector(vx, vy, 0);
+                    let r2 = std::f32::consts::FRAC_1_SQRT_2;
+                    sector(r2 * (vx - vy), r2 * (vx + vy), 1);
+                    if sum <= 0.0 {
+                        continue;
+                    }
+                    let g = (-3.125 * vv).exp() / sum;
+                    let cc = [c[0] * c[0], c[1] * c[1], c[2] * c[2]];
+                    for k in 0..8 {
+                        let ww = wk[k] * g;
+                        if ww == 0.0 {
+                            continue;
+                        }
+                        m[k][0] += c[0] * ww;
+                        m[k][1] += c[1] * ww;
+                        m[k][2] += c[2] * ww;
+                        m[k][3] += ww;
+                        s[k][0] += cc[0] * ww;
+                        s[k][1] += cc[1] * ww;
+                        s[k][2] += cc[2] * ww;
+                    }
+                }
+            }
+            // Numerically stable version of w = 1 / (1 + (k σ²)^(q/2)).
+            let mut xs = [f32::INFINITY; 8];
+            let mut means = [[0.0f32; 3]; 8];
+            let mut xmin = f32::INFINITY;
+            for k in 0..8 {
+                if m[k][3] <= 1e-12 {
+                    continue;
+                }
+                let inv = 1.0 / m[k][3];
+                let mean = [m[k][0] * inv, m[k][1] * inv, m[k][2] * inv];
+                let var = (s[k][0] * inv - mean[0] * mean[0]).abs()
+                    + (s[k][1] * inv - mean[1] * mean[1]).abs()
+                    + (s[k][2] * inv - mean[2] * mean[2]).abs();
+                means[k] = mean;
+                xs[k] = 0.5 * q * (hardness * var).max(1e-12).ln();
+                xmin = xmin.min(xs[k]);
+            }
+            let mut acc = [0.0f32; 4];
+            for k in 0..8 {
+                if !xs[k].is_finite() {
+                    continue;
+                }
+                let wt = if xmin > 20.0 { (-(xs[k] - xmin)).exp() } else { 1.0 / (1.0 + xs[k].exp()) };
+                acc[0] += means[k][0] * wt;
+                acc[1] += means[k][1] * wt;
+                acc[2] += means[k][2] * wt;
+                acc[3] += wt;
+            }
+            *o = if acc[3] > 0.0 { [acc[0] / acc[3], acc[1] / acc[3], acc[2] / acc[3]] } else { src.at(x, y) };
+        }
+        let d = done.fetch_add(1, Ordering::Relaxed);
+        if d.is_multiple_of(16) {
+            ctx.progress(p0 + (p1 - p0) * d as f32 / h as f32);
+        }
+    });
+    if ctx.cancelled() {
+        return None;
+    }
+    Some(Img { w, h, px: out })
+}
+
+pub fn streak_noise(w: usize, h: usize, cell: f32, seed: u32) -> Vec<f32> {
+    (0..w * h)
+        .into_par_iter()
+        .map(|i| {
+            let (x, y) = ((i % w) as f32, (i / w) as f32);
+            hash2((x / cell) as i32, (y / cell) as i32, seed)
+        })
+        .collect()
+}
+
+/// eXtended Difference of Gaussians, line mode: ~1 on flat areas, dark lines
+/// on the dark side of edges. `p` = edge emphasis, `eps` = threshold,
+/// `phi` = steepness of the tanh ramp.
+pub fn xdog(l: &[f32], w: usize, h: usize, sigma: f32, p: f32, eps: f32, phi: f32) -> Vec<f32> {
+    xdog_fill(l, w, h, sigma, p, eps, phi, 0.0)
+}
+
+/// `fill` blends between pure lines (0) and classic XDoG tonal fills (1).
+#[allow(clippy::too_many_arguments)]
+pub fn xdog_fill(l: &[f32], w: usize, h: usize, sigma: f32, p: f32, eps: f32, phi: f32, fill: f32) -> Vec<f32> {
+    let g1 = blur(l, w, h, sigma);
+    let g2 = blur(l, w, h, sigma * 1.6);
+    g1.par_iter()
+        .zip(g2.par_iter())
+        .map(|(&a, &b)| {
+            let s = (1.0 + (a - 1.0) * fill) + p * (a - b);
+            if s >= eps { 1.0 } else { (1.0 + (phi * (s - eps)).tanh()).max(0.0) }
+        })
+        .collect()
 }

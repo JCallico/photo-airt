@@ -330,8 +330,9 @@ pub struct Recipe {
     pub style: String,
     #[serde(default)]
     pub why: String,
+    /// Setting values by key: numbers, booleans (toggles) or strings (choices).
     #[serde(default)]
-    pub params: BTreeMap<String, f32>,
+    pub params: BTreeMap<String, crate::plugins::Value>,
     #[serde(default)]
     pub finish: Finish,
 }
@@ -536,7 +537,7 @@ impl AiHub {
                  \"paint_prompt\": \"a vivid 2-4 sentence instruction for an image-generation model to repaint this exact photo, \
                  keeping its composition, in that medium\"}}",
                 look = look_at(&cfg, &input),
-                cat = crate::styles::catalogue_for_prompt()
+                cat = crate::plugins::registry().catalogue_for_prompt()
             );
             stage(sh, &ctx, &format!("{} is studying your photo…", cfg.cli.name()));
             let text = run_text(&cfg, &prompt, &dir, &input, sh, &ctx)?;
@@ -1004,6 +1005,23 @@ mod tests {
         assert!(model_problem("rate limited, try again later").is_none());
         let err = format!("job: {MODEL_ERR}[claude:fable]: {reason}");
         assert_eq!(parse_model_error(&err), Some(("claude:fable".into(), reason)));
+    }
+
+    #[test]
+    fn director_recipes_accept_typed_setting_values() {
+        let json = r#"{"title": "T", "reading": "R", "recipes": [
+            {"name": "A", "style": "pixel", "params": {"size": 9, "colors": 300}},
+            {"name": "B", "style": "retro-print", "params": {"levels": 4, "invert": true, "ink": "sepia"}}
+        ]}"#;
+        let report: DirectorReport = serde_json::from_str(json).unwrap();
+        use crate::plugins::Value;
+        assert_eq!(report.recipes[1].params["invert"], Value::Bool(true));
+        assert_eq!(report.recipes[1].params["ink"], Value::Text("sepia".into()));
+        // Numbers are coerced into the style's ranges when applied.
+        let registry = crate::plugins::Registry::builtin();
+        let pixel = registry.get("pixel").unwrap();
+        let p = crate::plugins::Params::sanitized(pixel.description(), &report.recipes[0].params);
+        assert_eq!((p.get("size"), p.get("colors")), (9.0, 32.0));
     }
 
     #[test]

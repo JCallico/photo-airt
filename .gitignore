@@ -1,1 +1,5 @@
 /target
+# Executables built into plug-in folders (see docs/plugins.md).
+/plugins/*/bin/
+/plugins/*/.crates.toml
+/plugins/*/.crates2.json
