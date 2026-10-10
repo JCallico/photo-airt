@@ -82,8 +82,11 @@ mod tests {
             assert_eq!(manifest.version, env!("CARGO_PKG_VERSION"), "{}: built-in styles share the app's version", desc.id);
             let exe = if cfg!(windows) { format!("bin/{}.exe", desc.id) } else { format!("bin/{}", desc.id) };
             assert_eq!(manifest.command(), [exe], "{}: plugin.toml run", desc.id);
-            let cargo = std::fs::read_to_string(dir.join("Cargo.toml")).unwrap();
-            assert!(cargo.contains(&format!("[[bin]]\nname = \"{}\"", desc.id)), "{}: Cargo.toml must build bin/{0}", desc.id);
+            // Parsed rather than matched as text: Windows checkouts may use CRLF.
+            let cargo: toml::Table = toml::from_str(&std::fs::read_to_string(dir.join("Cargo.toml")).unwrap()).unwrap();
+            let bins: Vec<&str> =
+                cargo["bin"].as_array().into_iter().flatten().filter_map(|b| b.get("name").and_then(|n| n.as_str())).collect();
+            assert_eq!(bins, [desc.id.as_str()], "{}: Cargo.toml must build bin/{0}", desc.id);
         }
     }
 }
