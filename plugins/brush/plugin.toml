@@ -1,0 +1,86 @@
+# Photo·AIrt plug-in manifest: everything the app needs to list, describe
+# and run this style, read without running anything. Built into Photo·AIrt;
+# see docs/plugins.md, "Built-in styles are plug-ins too".
+protocol = 1
+id = "brush"
+name = "Impressionist Strokes"
+family = "Painterly"
+blurb = "Thousands of curved bristle strokes laid down coarse to fine."
+technique = "Hertzmann's multi-layer curved brush-stroke painter (SIGGRAPH '98) with structure-tensor stroke guidance, bristle texture and an impasto height map."
+version = "0.2.0"
+author = "Photo·AIrt"
+licence = "MIT"
+run = ["bin/brush"]
+run_windows = ["bin/brush.exe"]
+
+[[settings]]
+key = "brush"
+label = "Largest brush"
+type = "number"
+min = 4.0
+max = 40.0
+step = 1.0
+default = 16.0
+
+[[settings]]
+key = "layers"
+label = "Layers"
+type = "number"
+min = 1.0
+max = 4.0
+step = 1.0
+default = 3.0
+
+[[settings]]
+key = "threshold"
+label = "Detail threshold"
+type = "number"
+min = 0.02
+max = 0.3
+step = 0.005
+default = 0.09
+
+[[settings]]
+key = "length"
+label = "Stroke length"
+type = "number"
+min = 2.0
+max = 24.0
+step = 1.0
+default = 10.0
+
+[[settings]]
+key = "curvature"
+label = "Curvature"
+type = "number"
+min = 0.0
+max = 1.0
+step = 0.01
+default = 0.6
+
+[[settings]]
+key = "jitter"
+label = "Colour jitter"
+type = "number"
+min = 0.0
+max = 0.25
+step = 0.005
+default = 0.06
+
+[[settings]]
+key = "bristles"
+label = "Bristle texture"
+type = "number"
+min = 0.0
+max = 1.0
+step = 0.01
+default = 0.5
+
+[[settings]]
+key = "impasto"
+label = "Impasto relief"
+type = "number"
+min = 0.0
+max = 1.0
+step = 0.01
+default = 0.5

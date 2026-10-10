@@ -1,6 +1,6 @@
 [package]
 name = "photo-airt"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 description = "Photo·AIrt — turn your photographs into art with classic algorithms and AI (Claude & Codex CLIs)"
 license = "MIT"
@@ -20,11 +20,32 @@ serde_json = "1"
 rfd = "0.17"
 anyhow = "1"
 resvg = "0.48"
-delaunator = "1.1"
 dirs = "7"
 ureq = "3"
 url = "2"
 arboard = { version = "3.6", features = ["wayland-data-control"] }
+toml = "1"
+sha2 = "0.11"
+photo-airt-sdk = { path = "sdk", version = "0.2.0" }
+# The built-in styles (decision D3), in gallery order. Each is also a
+# standalone plug-in executable; see plugins/ and docs/plugins.md.
+photo-airt-oil = { path = "plugins/oil", version = "0.2.0" }
+photo-airt-brush = { path = "plugins/brush", version = "0.2.0" }
+photo-airt-watercolor = { path = "plugins/watercolor", version = "0.2.0" }
+photo-airt-flow = { path = "plugins/flow", version = "0.2.0" }
+photo-airt-pointillism = { path = "plugins/pointillism", version = "0.2.0" }
+photo-airt-pencil = { path = "plugins/pencil", version = "0.2.0" }
+photo-airt-ink = { path = "plugins/ink", version = "0.2.0" }
+photo-airt-toon = { path = "plugins/toon", version = "0.2.0" }
+photo-airt-stained-glass = { path = "plugins/stained_glass", version = "0.2.0" }
+photo-airt-lowpoly = { path = "plugins/lowpoly", version = "0.2.0" }
+photo-airt-popart = { path = "plugins/popart", version = "0.2.0" }
+photo-airt-halftone = { path = "plugins/halftone", version = "0.2.0" }
+photo-airt-riso = { path = "plugins/riso", version = "0.2.0" }
+photo-airt-pixel = { path = "plugins/pixel", version = "0.2.0" }
+
+[workspace]
+members = ["sdk", "plugins/*"]
 
 [profile.dev]
 opt-level = 2

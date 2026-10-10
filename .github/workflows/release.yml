@@ -44,8 +44,9 @@ jobs:
             echo "::error::Run this workflow against an existing version tag, not a branch."
             exit 1
           fi
-          # cargo metadata reads the package version without needing a TOML parser.
-          version=$(cargo metadata --no-deps --format-version 1 --locked | python3 -c 'import json,sys; print(json.load(sys.stdin)["packages"][0]["version"])')
+          # cargo metadata reads the app's version (the workspace also holds the SDK
+          # and the built-in style crates) without needing a TOML parser.
+          version=$(cargo metadata --no-deps --format-version 1 --locked | python3 -c 'import json,sys; print(next(p["version"] for p in json.load(sys.stdin)["packages"] if p["name"] == "photo-airt"))')
           if [[ "$TAG" != "v$version" ]]; then
             echo "::error::The release tag must match Cargo.toml: v$version."
             exit 1

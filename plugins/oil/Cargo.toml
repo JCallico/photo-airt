@@ -1,0 +1,17 @@
+[package]
+name = "photo-airt-oil"
+version = "0.2.0"
+edition = "2024"
+description = "Oil on Canvas: a Photo·AIrt style plug-in"
+license = "MIT"
+authors = ["Javier Callico"]
+repository = "https://github.com/JCallico/photo-airt"
+publish = false
+
+[[bin]]
+name = "oil"
+path = "src/main.rs"
+
+[dependencies]
+photo-airt-sdk = { path = "../../sdk", version = "0.2.0" }
+rayon = "1.12"

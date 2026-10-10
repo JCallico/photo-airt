@@ -1,0 +1,68 @@
+# Photo·AIrt plug-in manifest: everything the app needs to list, describe
+# and run this style, read without running anything. Built into Photo·AIrt;
+# see docs/plugins.md, "Built-in styles are plug-ins too".
+protocol = 1
+id = "ink"
+name = "Ink & Wash"
+family = "Drawing & Ink"
+blurb = "Crisp ink lines over a soft sumi wash."
+technique = "Winnemöller's eXtended Difference-of-Gaussians (XDoG) with a soft tanh threshold, over a posterised tonal wash."
+version = "0.2.0"
+author = "Photo·AIrt"
+licence = "MIT"
+run = ["bin/ink"]
+run_windows = ["bin/ink.exe"]
+
+[[settings]]
+key = "detail"
+label = "Line detail (σ)"
+type = "number"
+min = 0.4
+max = 4.0
+step = 0.05
+default = 1.4
+
+[[settings]]
+key = "strength"
+label = "Edge emphasis"
+type = "number"
+min = 5.0
+max = 60.0
+step = 0.5
+default = 16.0
+
+[[settings]]
+key = "threshold"
+label = "Threshold"
+type = "number"
+min = 0.2
+max = 1.2
+step = 0.01
+default = 0.62
+
+[[settings]]
+key = "softness"
+label = "Softness"
+type = "number"
+min = 0.0
+max = 1.0
+step = 0.01
+default = 0.4
+
+[[settings]]
+key = "wash"
+label = "Tonal wash"
+type = "number"
+min = 0.0
+max = 1.0
+step = 0.01
+default = 0.6
+
+[[settings]]
+key = "sepia"
+label = "Sepia paper"
+type = "number"
+min = 0.0
+max = 1.0
+step = 0.01
+default = 0.5

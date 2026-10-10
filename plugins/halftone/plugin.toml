@@ -1,0 +1,50 @@
+# Photo·AIrt plug-in manifest: everything the app needs to list, describe
+# and run this style, read without running anything. Built into Photo·AIrt;
+# see docs/plugins.md, "Built-in styles are plug-ins too".
+protocol = 1
+id = "halftone"
+name = "CMYK Halftone"
+family = "Print & Pixel"
+blurb = "Rosette dot screens of a vintage four-colour press."
+technique = "Per-channel rotated amplitude-modulated screens (15°/75°/0°/45°), subtractive ink compositing and plate misregistration."
+version = "0.2.0"
+author = "Photo·AIrt"
+licence = "MIT"
+run = ["bin/halftone"]
+run_windows = ["bin/halftone.exe"]
+
+[[settings]]
+key = "cell"
+label = "Screen size"
+type = "number"
+min = 3.0
+max = 24.0
+step = 0.5
+default = 8.0
+
+[[settings]]
+key = "angle"
+label = "Screen rotation"
+type = "number"
+min = 0.0
+max = 90.0
+step = 1.0
+default = 0.0
+
+[[settings]]
+key = "density"
+label = "Ink density"
+type = "number"
+min = 0.5
+max = 1.5
+step = 0.01
+default = 0.85
+
+[[settings]]
+key = "misregister"
+label = "Misregistration"
+type = "number"
+min = 0.0
+max = 4.0
+step = 0.1
+default = 0.8

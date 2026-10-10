@@ -13,8 +13,9 @@ use crate::ai::{self, AiEvent, AiHub, AiOutput, CliStatus, DirectorReport, Engin
 use crate::finish::Finish;
 use crate::imaging::Img;
 use crate::photo_io;
+use crate::plugins;
+use crate::plugins::{Ctx, Params};
 use crate::sources::{self, Asset, Recents};
-use crate::styles::{Ctx, Params, STYLES};
 
 pub const THUMB_LONG: usize = 420;
 
@@ -60,7 +61,8 @@ pub struct Artwork {
     pub tex: TextureHandle,
     pub pinned: bool,
     pub placard: Option<Placard>,
-    pub recipe: Option<(usize, Params, u64)>,
+    /// Style id, settings and seed that produced an algorithmic artwork.
+    pub recipe: Option<(String, Params, u64)>,
     pub prompt: Option<String>,
     pub saved: Option<PathBuf>,
     pub finish_gen: u64,
@@ -68,7 +70,7 @@ pub struct Artwork {
 
 pub struct RenderJob {
     pub id: u64,
-    pub style: usize,
+    pub style: String,
     pub progress: Arc<AtomicU32>,
     pub cancel: Arc<AtomicBool>,
 }
@@ -98,10 +100,12 @@ pub enum WorkerMsg {
     AcquireFailed { error: String },
     AcquireDone { batch: u64 },
     Clipboard(crate::app_open::ClipStatus),
-    Thumb { generation: u64, idx: usize, img: ColorImage },
+    PluginsScanned(Box<plugins::external::Scan>),
+    Thumb { generation: u64, style: String, img: ColorImage },
     RecipeThumb { generation: u64, idx: usize, img: ColorImage },
-    Rendered { job: u64, style: usize, params: Params, seed: u64, base: Arc<Img>, display: Arc<Img>, color: ColorImage },
+    Rendered { job: u64, style: String, params: Params, seed: u64, base: Arc<Img>, display: Arc<Img>, color: ColorImage },
     Finished { artwork: u64, generation: u64, display: Arc<Img>, color: ColorImage },
+    RenderFailed { job: u64, style: String, error: String },
     Exported(Result<PathBuf, String>),
     FilesPicked(Vec<PathBuf>),
 }
@@ -122,7 +126,7 @@ pub struct Session {
     pub artworks: Vec<Artwork>,
     pub selected: Option<u64>,
     pub director: Option<Director>,
-    pub thumbs: Vec<Option<TextureHandle>>,
+    pub thumbs: HashMap<String, TextureHandle>,
 }
 
 /// A photo opened in this session (shown as a stack when not on stage).
@@ -145,13 +149,15 @@ pub struct App {
     pub pan: Vec2,
     pub dragging_split: bool,
     pub left_tab: LeftTab,
-    pub style_idx: usize,
-    pub params: Vec<Params>,
+    /// The style selected in the Atelier (a plug-in id).
+    pub style_id: String,
+    /// Current settings per style id, created from defaults on first use.
+    pub params: HashMap<String, Params>,
     pub seed: u64,
     pub next_finish: Option<Finish>,
     pub render: Option<RenderJob>,
     pub render_due: Option<f64>,
-    pub thumbs: Vec<Option<TextureHandle>>,
+    pub thumbs: HashMap<String, TextureHandle>,
     pub thumb_gen: u64,
     pub tx: Sender<WorkerMsg>,
     rx: Receiver<WorkerMsg>,
@@ -192,6 +198,10 @@ pub struct App {
     /// Photo being brought on stage (still decoding), so rapid navigation
     /// keeps moving instead of restarting from the photo currently shown.
     pub switching_to: Option<u64>,
+    /// The latest plug-in scan (locations, statuses), shown in the Plug-ins panel.
+    pub plugin_scan: Option<plugins::external::Scan>,
+    pub scanning_plugins: bool,
+    pub plugins_open: bool,
     pub overview: crate::app_open::Overview,
 }
 
@@ -227,13 +237,13 @@ impl App {
             pan: Vec2::ZERO,
             dragging_split: false,
             left_tab: LeftTab::Algorithms,
-            style_idx: 0,
-            params: STYLES.iter().map(Params::defaults).collect(),
+            style_id: plugins::registry().first_id(),
+            params: HashMap::new(),
             seed: 7,
             next_finish: None,
             render: None,
             render_due: None,
-            thumbs: vec![None; STYLES.len()],
+            thumbs: HashMap::new(),
             thumb_gen: 0,
             tx,
             rx,
@@ -266,9 +276,13 @@ impl App {
             job_photo: HashMap::new(),
             film_focus: false,
             switching_to: None,
+            plugin_scan: None,
+            scanning_plugins: false,
+            plugins_open: false,
             overview: Default::default(),
         };
         app.rescan_clis();
+        app.rescan_plugins();
         if let Some(raw) = initial {
             match sources::classify(&raw) {
                 Ok(input) => app.open(vec![crate::app_open::OpenRequest::Input(input)]),
@@ -301,13 +315,14 @@ impl App {
     pub(crate) fn render_thumbs(&mut self) {
         let Some(photo) = &self.photo else { return };
         self.thumb_gen += 1;
-        self.thumbs = vec![None; STYLES.len()];
+        self.thumbs.clear();
         let (generation, thumb, tx, ctx) = (self.thumb_gen, photo.thumb.clone(), self.tx.clone(), self.ctx.clone());
+        let registry = plugins::registry();
         std::thread::spawn(move || {
-            for (idx, st) in STYLES.iter().enumerate() {
+            for plugin in registry.all() {
                 let c = Ctx::for_image(&thumb, 7);
-                if let Some(img) = (st.render)(&thumb, &Params::defaults(st), &c) {
-                    let _ = tx.send(WorkerMsg::Thumb { generation, idx, img: color_image(&img) });
+                if let Ok(img) = plugin.render(&thumb, &Params::defaults(plugin.description()), &c) {
+                    let _ = tx.send(WorkerMsg::Thumb { generation, style: plugin.id().to_string(), img: color_image(&img) });
                     ctx.request_repaint();
                 }
             }
@@ -316,8 +331,15 @@ impl App {
 
     // ------------------------------------------------------------ rendering
 
-    pub fn select_style(&mut self, idx: usize) {
-        self.style_idx = idx;
+    /// Settings for a style, initialised from its defaults on first use.
+    pub fn params_for(&mut self, style: &str) -> &mut Params {
+        self.params
+            .entry(style.to_string())
+            .or_insert_with(|| plugins::registry().get(style).map(|p| Params::defaults(p.description())).unwrap_or_default())
+    }
+
+    pub fn select_style(&mut self, id: &str) {
+        self.style_id = id.to_string();
         self.render_due = Some(self.now());
         if self.selected_artwork().is_some_and(|a| a.kind != Kind::Algorithm) || self.view == View::Gallery {
             // Jump back to the algorithm draft so the change is visible.
@@ -334,12 +356,16 @@ impl App {
     }
 
     fn start_render(&mut self) {
-        let Some(photo) = &self.photo else { return };
+        if self.photo.is_none() {
+            return;
+        }
         if let Some(r) = &self.render {
             r.cancel.store(true, Ordering::Relaxed);
         }
-        let style = self.style_idx;
-        let params = self.params[style].clone();
+        let style = self.style_id.clone();
+        let Some(plugin) = plugins::registry().get(&style).cloned() else { return };
+        let params = self.params_for(&style).clone();
+        let Some(photo) = &self.photo else { return };
         let seed = self.seed;
         let finish = self.next_finish.take().unwrap_or_else(|| {
             self.draft_id().and_then(|id| self.artworks.iter().find(|a| a.id == id)).map(|a| a.finish).unwrap_or_default()
@@ -348,14 +374,27 @@ impl App {
         let ctx = Ctx::for_image(&img, seed);
         let id = self.next_id;
         self.next_id += 1;
-        self.render = Some(RenderJob { id, style, progress: ctx.progress.clone(), cancel: ctx.cancel.clone() });
+        self.render = Some(RenderJob { id, style: style.clone(), progress: ctx.progress.clone(), cancel: ctx.cancel.clone() });
         let (tx, ectx) = (self.tx.clone(), self.ctx.clone());
         std::thread::spawn(move || {
-            if let Some(out) = (STYLES[style].render)(&img, &params, &ctx) {
-                let display = finish.apply(&out);
-                let color = color_image(&display);
-                let _ =
-                    tx.send(WorkerMsg::Rendered { job: id, style, params, seed, base: Arc::new(out), display: Arc::new(display), color });
+            match plugin.render(&img, &params, &ctx) {
+                Ok(out) => {
+                    let display = finish.apply(&out);
+                    let color = color_image(&display);
+                    let _ = tx.send(WorkerMsg::Rendered {
+                        job: id,
+                        style,
+                        params,
+                        seed,
+                        base: Arc::new(out),
+                        display: Arc::new(display),
+                        color,
+                    });
+                }
+                Err(plugins::RenderError::Cancelled) => {}
+                Err(plugins::RenderError::Failed(error)) => {
+                    let _ = tx.send(WorkerMsg::RenderFailed { job: id, style, error });
+                }
             }
             ectx.request_repaint();
         });
@@ -404,8 +443,8 @@ impl App {
         if let Some(a) = self.selected_artwork()
             && let Some((style, params, seed)) = a.recipe.clone()
         {
-            self.style_idx = style;
-            self.params[style] = params;
+            self.params.insert(style.clone(), params);
+            self.style_id = style;
             self.seed = seed;
         }
     }
@@ -453,10 +492,12 @@ impl App {
             (Kind::Algorithm, Some((style, params, seed))) => {
                 // Re-render at the photo's full resolution for print-quality output.
                 let path = photo.path.clone();
+                let plugin = plugins::registry().get(&style).cloned();
                 Box::new(move || {
+                    let plugin = plugin.ok_or_else(|| anyhow::anyhow!("style {style} is no longer available"))?;
                     let full = Img::from_rgb8(&photo_io::load_photo(&path)?).fit_long(6000);
                     let c = Ctx::for_image(&full, seed);
-                    let out = (STYLES[style].render)(&full, &params, &c).ok_or_else(|| anyhow::anyhow!("cancelled"))?;
+                    let out = plugin.render(&full, &params, &c)?;
                     photo_io::save_unique(&finish.apply(&out).to_rgb8(), &photo_io::output_dir(), &stem)
                 })
             }
@@ -477,7 +518,71 @@ impl App {
     pub fn open_output_folder(&self) {
         let dir = photo_io::output_dir();
         let _ = std::fs::create_dir_all(&dir);
-        let _ = std::process::Command::new("xdg-open").arg(dir).spawn();
+        open_in_file_manager(&dir);
+    }
+
+    // ------------------------------------------------------------ plug-ins
+
+    /// Look for external plug-ins in every location, off the UI thread.
+    pub fn rescan_plugins(&mut self) {
+        if self.scanning_plugins {
+            return;
+        }
+        self.scanning_plugins = true;
+        let (tx, ctx) = (self.tx.clone(), self.ctx.clone());
+        std::thread::spawn(move || {
+            let scan = plugins::external::scan(&plugins::Registry::builtin_ids(), &plugins::external::Trust::load());
+            let _ = tx.send(WorkerMsg::PluginsScanned(Box::new(scan)));
+            ctx.request_repaint();
+        });
+    }
+
+    fn on_plugins_scanned(&mut self, scan: plugins::external::Scan) {
+        self.scanning_plugins = false;
+        let before: Vec<String> = plugins::registry().all().iter().map(|p| p.id().to_string()).collect();
+        plugins::install(plugins::Registry::with_external(&scan));
+        let registry = plugins::registry();
+        let after: Vec<String> = registry.all().iter().map(|p| p.id().to_string()).collect();
+        if registry.get(&self.style_id).is_none() {
+            self.style_id = registry.first_id();
+        }
+        if before != after && self.photo.is_some() {
+            self.render_thumbs();
+        }
+        let pending = scan.needing_approval();
+        if pending > 0 && !self.plugins_open {
+            let s = if pending == 1 { "plug-in needs" } else { "plug-ins need" };
+            self.toast(format!("{pending} {s} your approval: open Plug-ins to review"), crate::theme::GOLD);
+        }
+        self.plugin_scan = Some(scan);
+    }
+
+    /// Approve a plug-in as it is now (pinned to its checksum) and rescan.
+    pub fn approve_plugin(&mut self, dir: &std::path::Path, checksum: &str) {
+        let mut trust = plugins::external::Trust::load();
+        trust.approve(dir, checksum);
+        match trust.save() {
+            Ok(()) => self.rescan_plugins(),
+            Err(e) => self.toast(format!("Could not save the approval: {e}"), crate::theme::DANGER),
+        }
+    }
+
+    pub fn revoke_plugin(&mut self, dir: &std::path::Path) {
+        let mut trust = plugins::external::Trust::load();
+        trust.revoke(dir);
+        match trust.save() {
+            Ok(()) => self.rescan_plugins(),
+            Err(e) => self.toast(format!("Could not save: {e}"), crate::theme::DANGER),
+        }
+    }
+
+    /// Create (if needed) and open the user's plug-ins folder.
+    pub fn open_user_plugins_folder(&mut self) {
+        let Some(dir) = plugins::external::user_folder() else { return };
+        match std::fs::create_dir_all(&dir) {
+            Ok(()) => open_in_file_manager(&dir),
+            Err(e) => self.toast(format!("Could not create {}: {e}", dir.display()), crate::theme::DANGER),
+        }
     }
 
     // ------------------------------------------------------------ AI
@@ -579,14 +684,17 @@ impl App {
     pub fn apply_recipe(&mut self, idx: usize) {
         let Some(d) = &self.director else { return };
         let r = &d.report.recipes[idx];
-        let Some(style) = crate::styles::style_index(&r.style) else {
+        let registry = plugins::registry();
+        let Some(plugin) = registry.get(&r.style) else {
             self.toast(format!("Unknown style “{}”", r.style), crate::theme::DANGER);
             return;
         };
-        self.params[style] = Params::sanitized(&STYLES[style], &r.params);
+        let params = Params::sanitized(plugin.description(), &r.params);
+        let style = plugin.id().to_string();
         self.next_finish = Some(r.finish.sanitized());
         let name = r.name.clone();
-        self.style_idx = style;
+        self.params.insert(style.clone(), params);
+        self.style_id = style;
         self.recipe_title = Some(name);
         self.selected = self.draft_id();
         self.render_due = Some(self.now());
@@ -600,15 +708,17 @@ impl App {
             .report
             .recipes
             .iter()
-            .map(|r| crate::styles::style_index(&r.style).map(|s| (s, Params::sanitized(&STYLES[s], &r.params), r.finish.sanitized())))
+            .map(|r| {
+                plugins::registry().get(&r.style).map(|p| (p.clone(), Params::sanitized(p.description(), &r.params), r.finish.sanitized()))
+            })
             .collect();
         d.thumbs = vec![None; recipes.len()];
         let (thumb, tx, ctx) = (photo.thumb.clone(), self.tx.clone(), self.ctx.clone());
         std::thread::spawn(move || {
             for (idx, r) in recipes.into_iter().enumerate() {
-                let Some((s, params, finish)) = r else { continue };
+                let Some((plugin, params, finish)) = r else { continue };
                 let c = Ctx::for_image(&thumb, 7);
-                if let Some(img) = (STYLES[s].render)(&thumb, &params, &c) {
+                if let Ok(img) = plugin.render(&thumb, &params, &c) {
                     let _ = tx.send(WorkerMsg::RecipeThumb { generation, idx, img: color_image(&finish.apply(&img)) });
                     ctx.request_repaint();
                 }
@@ -683,9 +793,11 @@ impl App {
                 self.recents.save();
             }
             WorkerMsg::Clipboard(status) => self.open_sheet.clip = status,
-            WorkerMsg::Thumb { generation, idx, img } => {
+            WorkerMsg::PluginsScanned(scan) => self.on_plugins_scanned(*scan),
+            WorkerMsg::Thumb { generation, style, img } => {
                 if generation == self.thumb_gen {
-                    self.thumbs[idx] = Some(self.ctx.load_texture(format!("thumb-{idx}"), img, TextureOptions::LINEAR));
+                    let tex = self.ctx.load_texture(format!("thumb-{style}"), img, TextureOptions::LINEAR);
+                    self.thumbs.insert(style, tex);
                 }
             }
             WorkerMsg::RecipeThumb { generation, idx, img } => {
@@ -697,6 +809,13 @@ impl App {
                     d.thumbs[idx] = Some(tex);
                 }
             }
+            WorkerMsg::RenderFailed { job, style, error } => {
+                if self.render.as_ref().map(|r| r.id) == Some(job) {
+                    self.render = None;
+                    let name = plugins::registry().get(&style).map(|p| p.description().name.clone()).unwrap_or(style);
+                    self.toast(format!("{name} failed: {}", error.chars().take(220).collect::<String>()), crate::theme::DANGER);
+                }
+            }
             WorkerMsg::Rendered { job, style, params, seed, base, display, color } => {
                 if self.render.as_ref().map(|r| r.id) != Some(job) {
                     return;
@@ -706,8 +825,9 @@ impl App {
                     Some((id, f)) if id == job => f,
                     _ => Finish::default(),
                 };
-                let title = self.recipe_title.take().unwrap_or_else(|| STYLES[style].name.to_string());
-                let subtitle = format!("Algorithm · {}", STYLES[style].name);
+                let style_name = plugins::registry().get(&style).map(|p| p.description().name.clone()).unwrap_or_else(|| style.clone());
+                let title = self.recipe_title.take().unwrap_or_else(|| style_name.clone());
+                let subtitle = format!("Algorithm · {style_name}");
                 let now = self.now();
                 let tex = self.ctx.load_texture(format!("draft-{job}"), color, TextureOptions::LINEAR);
                 let id = match self.draft_id() {
@@ -853,4 +973,16 @@ impl eframe::App for App {
             ui.ctx().request_repaint_after(std::time::Duration::from_millis(16));
         }
     }
+}
+
+/// Reveal a folder in the platform's file manager.
+pub fn open_in_file_manager(dir: &std::path::Path) {
+    let program = if cfg!(windows) {
+        "explorer"
+    } else if cfg!(target_os = "macos") {
+        "open"
+    } else {
+        "xdg-open"
+    };
+    let _ = std::process::Command::new(program).arg(dir).spawn();
 }

@@ -1,0 +1,50 @@
+# Photo·AIrt plug-in manifest: everything the app needs to list, describe
+# and run this style, read without running anything. Built into Photo·AIrt;
+# see docs/plugins.md, "Built-in styles are plug-ins too".
+protocol = 1
+id = "riso"
+name = "Risograph"
+family = "Print & Pixel"
+blurb = "Two fluorescent soy inks, grainy and slightly off-register."
+technique = "Least-squares optical-density separation into two ink layers, stochastic grain screening and drum misregistration."
+version = "0.2.0"
+author = "Photo·AIrt"
+licence = "MIT"
+run = ["bin/riso"]
+run_windows = ["bin/riso.exe"]
+
+[[settings]]
+key = "inks"
+label = "Ink pair"
+type = "number"
+min = 0.0
+max = 4.0
+step = 1.0
+default = 0.0
+
+[[settings]]
+key = "grain"
+label = "Grain"
+type = "number"
+min = 0.0
+max = 1.0
+step = 0.01
+default = 0.5
+
+[[settings]]
+key = "misregister"
+label = "Misregistration"
+type = "number"
+min = 0.0
+max = 10.0
+step = 0.1
+default = 3.0
+
+[[settings]]
+key = "contrast"
+label = "Contrast"
+type = "number"
+min = 0.5
+max = 2.0
+step = 0.01
+default = 1.2

@@ -15,7 +15,6 @@ use crate::finish::Finish;
 use crate::imaging::Img;
 use crate::photo_io;
 use crate::sources::{self, Asset, Clip, Input, Recents};
-use crate::styles::STYLES;
 
 /// Something the user asked to open.
 #[derive(Clone, Debug)]
@@ -304,7 +303,7 @@ impl App {
             artworks: std::mem::take(&mut self.artworks),
             selected: self.selected.take(),
             director: self.director.take(),
-            thumbs: std::mem::replace(&mut self.thumbs, vec![None; STYLES.len()]),
+            thumbs: std::mem::take(&mut self.thumbs),
         };
         if let Some(t) = self.tray.iter_mut().find(|t| t.id == cur) {
             t.session = Some(session);
@@ -336,7 +335,7 @@ impl App {
                 self.thumbs = session.thumbs;
                 self.zoom = 1.0;
                 self.pan = Vec2::ZERO;
-                if self.thumbs.iter().any(Option::is_none) {
+                if self.thumbs.len() < crate::plugins::registry().all().len() {
                     self.render_thumbs();
                 }
                 if self.director.as_ref().is_some_and(|d| d.thumbs.is_empty() && !d.report.recipes.is_empty()) {

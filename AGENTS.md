@@ -4,13 +4,37 @@
 
 - `src/main.rs` contains the entry point: the GUI, plus the `--render` (batch
   styles) and `--ai` (single AI job) command-line modes.
-- `src/imaging.rs` holds the shared raster primitives. These cover the float
-  `Img` buffer, blurs, structure-tensor flow fields, LIC, distance
-  transforms, relief lighting, noise and the deterministic `Rng`. Reuse them
-  rather than re-implementing per style.
-- `src/styles/` is the algorithm catalogue. `mod.rs` holds the registry
-  (`STYLES`), the parameter schema, `Params` and the render `Ctx`.
-  `painterly.rs`, `drawing.rs` and `graphic.rs` hold the implementations.
+- `sdk/` is the `photo-airt-sdk` crate shared by the app and every built-in
+  style:
+  - `imaging.rs` holds the shared raster primitives. These cover the float
+    `Img` buffer, blurs, structure-tensor flow fields, LIC, distance
+    transforms, relief lighting, noise, the deterministic `Rng` and the
+    filters several styles share (`akf`, `xdog`). Reuse them rather than
+    re-implementing per style.
+  - `contract.rs` holds the style contract: the `Manifest` (`plugin.toml`,
+    the complete description of a plug-in), `Description`, `Setting`,
+    `Value`, `Params`, the render `Ctx`, `Style`, `RenderRequest` and
+    `PROTOCOL`.
+  - `serve.rs` is the plug-in side of the external contract (`serve`,
+    `render_command`), so any Rust style can run as a standalone plug-in.
+- `plugins/<id>/` holds the 14 built-in styles, one folder each, laid out like
+  an external plug-in: `plugin.toml` (the description and settings; runs
+  `bin/<id>`), plus a crate whose `src/lib.rs` embeds that `plugin.toml` as
+  its description and has the style's `render`, and whose `src/main.rs` is
+  the standalone executable. The app links every crate in
+  (`src/plugins/builtin.rs`, gallery order); moved to a plug-ins location
+  with its executable in `bin/`, the same folder loads as an external
+  plug-in.
+- `src/plugins/` is the plug-in system (BL-001):
+  - `mod.rs` holds the `StylePlugin` trait, the self-description schema
+    (`Description`, `Setting`, `Value`) and the `Registry`, which the whole
+    app reads from via `plugins::registry()`;
+  - `builtin.rs` lists the built-in style crates and exposes them as
+    plug-ins;
+  - `external.rs` holds the external side: discovery (reading manifests
+    only), trust, `ProcessPlugin`, the job folder and the `--check-plugin`
+    validator.
+- `src/ui_plugins.rs` draws the Plug-ins panel.
 - `src/finish.rs` is the non-destructive finishing layer applied to every
   artwork.
 - `src/ai.rs` integrates the CLIs. It covers CLI and model discovery, roles
@@ -36,6 +60,12 @@
 - `src/ui_open.rs` draws the Open sheet, the "All photos" contact sheet and
   the progress pill. The collection bar (the photo on stage expanded, other
   photos as stacks) lives in `src/ui_panels.rs`.
+- `examples/plugins/` holds the example external plug-ins: `retro-print`
+  (Python) and `copperplate` (Node.js). CI validates them with
+  `--check-plugin`, and a unit test loads them through the real discovery,
+  approval and registry path. To use them in the app, run with
+  `PHOTO_AIRT_PLUGINS=examples/plugins`.
+  `docs/plugins.md` is the plug-in authoring guide.
 - `BACKLOG.md` tracks planned features with their status and open design
   questions. Add ideas there rather than starting unplanned work.
 - `assets/fonts/` holds the bundled OFL fonts. `docs/screenshots/` holds the
@@ -90,10 +120,10 @@ root (prefix them with `mise exec --` if Rust is not on `PATH`):
 
 ```bash
 cargo run --release -- path/to/photo.jpg
-cargo test --release
-cargo clippy --release --all-targets -- -D warnings
-cargo fmt --check
-RUSTDOCFLAGS="-D warnings" cargo doc --no-deps
+cargo test --release --workspace
+cargo clippy --release --workspace --all-targets -- -D warnings
+cargo fmt --all --check
+RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --workspace
 cargo deny check   # needs cargo-deny, e.g. `mise exec cargo-deny@latest -- cargo-deny check`
 ```
 
@@ -111,7 +141,17 @@ the dev profile already optimises dependencies.
   background threads, and report back through the existing channels with
   `ctx.request_repaint()`.
 - **Styles**:
-  - Each style is a pure `fn(&Img, &Params, &Ctx) -> Option<Img>`.
+  - The app reaches styles only through `plugins::registry()`, by id. Never
+    index the built-in table from app or UI code.
+  - Each built-in style is its own crate in `plugins/<id>/`, exposing a
+    `photo_airt_sdk::Style`: a `description` function that embeds the
+    folder's `plugin.toml`, and a pure
+    `fn(&Img, &Params, &Ctx) -> Option<Img>`. Edit names, descriptions and
+    settings in `plugin.toml`, never in Rust. Keep a style's code inside its
+    folder; move only genuinely shared filters into `sdk/src/imaging.rs`.
+  - Add a built-in style by copying a folder under `plugins/`, renaming the
+    package, `[[bin]]` and `plugin.toml` to the new id, and listing the crate
+    in `Cargo.toml` and `STYLES` in `src/plugins/builtin.rs`.
   - Scale size-like parameters with `ctx.px()` so thumbnails, previews and
     full-resolution exports look alike.
   - Report progress through `ctx.progress()`.
@@ -121,7 +161,11 @@ the dev profile already optimises dependencies.
   - command-line modes and flags;
   - `PHOTO_AIRT_*` environment variables;
   - style ids and parameter keys, which AI recipes reference by name;
-  - the `prefs.json` and `recents.json` formats;
+  - the `prefs.json`, `recents.json` and `plugin-trust.json` formats;
+  - the external plug-in contract: `plugin.toml`, `request.json`,
+    the JSON Lines messages and the plug-in locations. Published contract
+    versions are supported forever (BL-001, D10). Change them only
+    additively, and update `docs/plugins.md` with every change;
   - the output locations (`~/Pictures/Photo-AIrt`, `~/.cache/photo-airt`).
 - When renaming shared symbols, search the whole source tree, including
   tests, before building.
@@ -143,6 +187,20 @@ the dev profile already optimises dependencies.
 - Never pass unsniffed bytes to external converters.
 - Tests use the local `127.0.0.1` server helpers (`with_policy(true, …)`),
   never the real internet.
+
+## Plug-ins
+
+- Built-in styles and external plug-ins share the `StylePlugin` contract.
+  Anything that only works for built-ins is a contract bug.
+- Discovery only reads `plugin.toml`. Never run an external plug-in unless
+  it is approved and its folder checksum matches the approval (D7).
+- The app stays a single self-contained executable (D3). External plug-ins
+  are optional, and nothing may require files beside the executable.
+- Every built-in folder must stay loadable as an external plug-in: its
+  `plugin.toml` is valid and runs `bin/<id>`, and its crate embeds that
+  manifest and builds that executable. A unit test and a CI step check this.
+- Converting or changing a built-in style must not change its output unless
+  that is the intent. Compare `--render all` output before and after.
 
 ## AI CLI integration
 
@@ -188,10 +246,10 @@ commit or push, always run the full test, lint, format and whitespace
 sequence:
 
 ```bash
-cargo test --release
-cargo clippy --release --all-targets -- -D warnings
-cargo fmt --check
-RUSTDOCFLAGS="-D warnings" cargo doc --no-deps
+cargo test --release --workspace
+cargo clippy --release --workspace --all-targets -- -D warnings
+cargo fmt --all --check
+RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --workspace
 cargo deny check
 git diff --check
 ```
@@ -201,8 +259,8 @@ git diff --check
 - If a new dependency introduces a license that is not allowed, never
   loosen `deny.toml` silently. Present the crate and its license to the user
   first.
-- If the format check reports files, run `cargo fmt`, then rerun the complete
-  sequence. Do not rely on clippy alone, because it does not enforce
+- If the format check reports files, run `cargo fmt --all`, then rerun the
+  complete sequence. Do not rely on clippy alone, because it does not enforce
   formatting.
 - For algorithm changes, also render the affected styles with
   `photo-airt --render <id|all> photo.jpg out/` and inspect the images.

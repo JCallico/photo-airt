@@ -5,7 +5,7 @@
 use egui::{Align2, Color32, CornerRadius, FontId, Mesh, Pos2, Rect, Sense, Shape, Stroke, TextureId, Ui, Vec2, pos2, vec2};
 
 use crate::app::{App, Kind, View};
-use crate::styles::STYLES;
+use crate::plugins;
 use crate::theme::{self, *};
 
 const UV: Rect = Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0));
@@ -239,7 +239,11 @@ impl App {
         // Render progress.
         if let Some(r) = &self.render {
             let frac = r.progress.load(std::sync::atomic::Ordering::Relaxed) as f32 / 1000.0;
-            let txt = format!("Painting {} …  {:.0}%", STYLES[r.style].name, frac * 100.0);
+            let txt = format!(
+                "Painting {} …  {:.0}%",
+                plugins::registry().get(&r.style).map(|p| p.description().name.clone()).unwrap_or_default(),
+                frac * 100.0
+            );
             let g = painter.layout_no_wrap(txt, FontId::proportional(12.5), TEXT);
             let w = g.size().x + 60.0;
             let pill = Rect::from_center_size(pos2(rect.center().x, rect.bottom() - 34.0), vec2(w, 36.0));
@@ -486,7 +490,11 @@ impl App {
                 Some(p) => (p.title.clone(), format!("{}, {}\n{}", p.medium, p.year, photo.asset.origin.after_credit()), p.note.clone()),
                 None => {
                     let note = match a.kind {
-                        Kind::Algorithm => a.recipe.as_ref().map(|r| STYLES[r.0].technique.to_string()).unwrap_or_default(),
+                        Kind::Algorithm => a
+                            .recipe
+                            .as_ref()
+                            .and_then(|r| plugins::registry().get(&r.0).map(|p| p.description().technique.clone()))
+                            .unwrap_or_default(),
                         Kind::Ai(_) => a.prompt.clone().unwrap_or_default().chars().take(260).collect(),
                     };
                     (a.title.clone(), format!("{}\n{}", a.subtitle, photo.asset.origin.after_credit()), note)

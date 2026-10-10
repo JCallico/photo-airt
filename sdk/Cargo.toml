@@ -1,0 +1,16 @@
+[package]
+name = "photo-airt-sdk"
+version = "0.2.0"
+edition = "2024"
+description = "Shared imaging primitives and the style plug-in contract for Photo·AIrt"
+license = "MIT"
+authors = ["Javier Callico"]
+repository = "https://github.com/JCallico/photo-airt"
+publish = false
+
+[dependencies]
+image = { version = "0.25", default-features = false, features = ["png", "rayon"] }
+rayon = "1.12"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "1"

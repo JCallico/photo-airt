@@ -1,0 +1,59 @@
+# Photo·AIrt plug-in manifest: everything the app needs to list, describe
+# and run this style, read without running anything. Built into Photo·AIrt;
+# see docs/plugins.md, "Built-in styles are plug-ins too".
+protocol = 1
+id = "pencil"
+name = "Graphite Sketch"
+family = "Drawing & Ink"
+blurb = "Pencil on paper with hatching that follows the shapes."
+technique = "Colour-dodge sketch (grey ÷ blurred inverse) combined with flow-aligned LIC hatching and paper tooth."
+version = "0.2.0"
+author = "Photo·AIrt"
+licence = "MIT"
+run = ["bin/pencil"]
+run_windows = ["bin/pencil.exe"]
+
+[[settings]]
+key = "weight"
+label = "Line weight"
+type = "number"
+min = 1.0
+max = 12.0
+step = 0.5
+default = 4.0
+
+[[settings]]
+key = "darkness"
+label = "Darkness"
+type = "number"
+min = 0.0
+max = 1.0
+step = 0.01
+default = 0.55
+
+[[settings]]
+key = "hatching"
+label = "Hatching"
+type = "number"
+min = 0.0
+max = 1.0
+step = 0.01
+default = 0.6
+
+[[settings]]
+key = "color"
+label = "Colour pencil"
+type = "number"
+min = 0.0
+max = 1.0
+step = 0.01
+default = 0.0
+
+[[settings]]
+key = "paper"
+label = "Paper tooth"
+type = "number"
+min = 0.0
+max = 1.0
+step = 0.01
+default = 0.5
