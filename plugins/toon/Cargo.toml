@@ -1,0 +1,16 @@
+[package]
+name = "photo-airt-toon"
+version = "0.2.0"
+edition = "2024"
+description = "Cel Animation: a Photo·AIrt style plug-in"
+license = "MIT"
+authors = ["Javier Callico"]
+repository = "https://github.com/JCallico/photo-airt"
+publish = false
+
+[[bin]]
+name = "toon"
+path = "src/main.rs"
+
+[dependencies]
+photo-airt-sdk = { path = "../../sdk", version = "0.2.0" }

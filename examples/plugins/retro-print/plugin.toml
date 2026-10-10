@@ -1,0 +1,43 @@
+# Photo·AIrt plug-in manifest: everything the app needs to list, describe and
+# run this plug-in. The app reads it without running anything, so users see
+# exactly what they are approving.
+protocol = 1
+id = "retro-print"
+name = "Retro Print"
+family = "Plug-in examples"
+blurb = "Posterised colour printed with a vintage ink."
+technique = "Per-channel posterisation and ink tone curves applied with byte lookup tables, in a Python plug-in that uses only the standard library."
+version = "1.0.0"
+author = "Photo·AIrt"
+licence = "MIT"
+timeout_seconds = 60
+run = ["python3", "retro_print.py"]
+run_windows = ["python", "retro_print.py"]
+
+# One setting of each kind: a slider, a toggle and a drop-down.
+[[settings]]
+key = "levels"
+label = "Tone levels"
+type = "number"
+min = 2
+max = 12
+step = 1
+default = 5
+
+[[settings]]
+key = "invert"
+label = "Invert (negative)"
+type = "toggle"
+default = false
+
+[[settings]]
+key = "ink"
+label = "Ink"
+type = "choice"
+default = "sepia"
+options = [
+  { value = "natural", label = "Natural colour" },
+  { value = "sepia", label = "Sepia" },
+  { value = "cyanotype", label = "Cyanotype" },
+  { value = "riso-pink", label = "Risograph pink" },
+]

@@ -1,0 +1,50 @@
+# Photo·AIrt plug-in manifest: everything the app needs to list, describe
+# and run this style, read without running anything. Built into Photo·AIrt;
+# see docs/plugins.md, "Built-in styles are plug-ins too".
+protocol = 1
+id = "lowpoly"
+name = "Low Poly"
+family = "Geometric"
+blurb = "Faceted triangles that crystallise the scene."
+technique = "Edge-weighted point sampling, Delaunay triangulation and per-facet colour with directional facet lighting."
+version = "0.2.0"
+author = "Photo·AIrt"
+licence = "MIT"
+run = ["bin/lowpoly"]
+run_windows = ["bin/lowpoly.exe"]
+
+[[settings]]
+key = "points"
+label = "Triangles"
+type = "number"
+min = 200.0
+max = 8000.0
+step = 50.0
+default = 1800.0
+
+[[settings]]
+key = "focus"
+label = "Edge focus"
+type = "number"
+min = 0.0
+max = 1.0
+step = 0.01
+default = 0.7
+
+[[settings]]
+key = "light"
+label = "Facet light"
+type = "number"
+min = 0.0
+max = 1.0
+step = 0.01
+default = 0.3
+
+[[settings]]
+key = "outline"
+label = "Wireframe"
+type = "number"
+min = 0.0
+max = 1.0
+step = 0.01
+default = 0.0

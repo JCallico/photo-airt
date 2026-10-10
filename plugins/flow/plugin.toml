@@ -1,0 +1,68 @@
+# Photo·AIrt plug-in manifest: everything the app needs to list, describe
+# and run this style, read without running anything. Built into Photo·AIrt;
+# see docs/plugins.md, "Built-in styles are plug-ins too".
+protocol = 1
+id = "flow"
+name = "Starry Flow"
+family = "Painterly"
+blurb = "Swirling, rhythmic strokes in the spirit of Van Gogh."
+technique = "Line integral convolution of colour-jittered stroke noise along a heavily smoothed edge-tangent flow, with tone banding and relief lighting."
+version = "0.2.0"
+author = "Photo·AIrt"
+licence = "MIT"
+run = ["bin/flow"]
+run_windows = ["bin/flow.exe"]
+
+[[settings]]
+key = "length"
+label = "Stroke length"
+type = "number"
+min = 4.0
+max = 40.0
+step = 1.0
+default = 18.0
+
+[[settings]]
+key = "width"
+label = "Stroke width"
+type = "number"
+min = 1.0
+max = 8.0
+step = 0.5
+default = 3.0
+
+[[settings]]
+key = "swirl"
+label = "Swirl smoothness"
+type = "number"
+min = 2.0
+max = 24.0
+step = 0.5
+default = 9.0
+
+[[settings]]
+key = "vibrance"
+label = "Vibrance"
+type = "number"
+min = 0.0
+max = 1.0
+step = 0.01
+default = 0.55
+
+[[settings]]
+key = "bands"
+label = "Tone bands (0 = off)"
+type = "number"
+min = 0.0
+max = 12.0
+step = 1.0
+default = 7.0
+
+[[settings]]
+key = "impasto"
+label = "Impasto relief"
+type = "number"
+min = 0.0
+max = 1.0
+step = 0.01
+default = 0.55

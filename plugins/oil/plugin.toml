@@ -1,0 +1,59 @@
+# Photo·AIrt plug-in manifest: everything the app needs to list, describe
+# and run this style, read without running anything. Built into Photo·AIrt;
+# see docs/plugins.md, "Built-in styles are plug-ins too".
+protocol = 1
+id = "oil"
+name = "Oil on Canvas"
+family = "Painterly"
+blurb = "Thick, sculpted paint that follows the forms of your photo."
+technique = "Anisotropic Kuwahara filter with polynomial sector weights (Kyprianidis 2010) steered by a smoothed structure tensor, then relit as impasto."
+version = "0.2.0"
+author = "Photo·AIrt"
+licence = "MIT"
+run = ["bin/oil"]
+run_windows = ["bin/oil.exe"]
+
+[[settings]]
+key = "radius"
+label = "Brush radius"
+type = "number"
+min = 2.0
+max = 14.0
+step = 0.5
+default = 6.0
+
+[[settings]]
+key = "sharpness"
+label = "Sharpness"
+type = "number"
+min = 1.0
+max = 18.0
+step = 0.5
+default = 8.0
+
+[[settings]]
+key = "anisotropy"
+label = "Stroke elongation"
+type = "number"
+min = 0.2
+max = 3.0
+step = 0.05
+default = 1.0
+
+[[settings]]
+key = "impasto"
+label = "Impasto relief"
+type = "number"
+min = 0.0
+max = 1.0
+step = 0.01
+default = 0.45
+
+[[settings]]
+key = "saturation"
+label = "Pigment saturation"
+type = "number"
+min = 0.6
+max = 1.8
+step = 0.01
+default = 1.15

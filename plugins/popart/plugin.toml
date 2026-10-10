@@ -1,0 +1,41 @@
+# Photo·AIrt plug-in manifest: everything the app needs to list, describe
+# and run this style, read without running anything. Built into Photo·AIrt;
+# see docs/plugins.md, "Built-in styles are plug-ins too".
+protocol = 1
+id = "popart"
+name = "Pop Art Quad"
+family = "Geometric"
+blurb = "Four screen-printed panels in clashing pop palettes."
+technique = "Tone posterisation mapped through four hand-picked palettes, with Ben-Day dots and ink outlines."
+version = "0.2.0"
+author = "Photo·AIrt"
+licence = "MIT"
+run = ["bin/popart"]
+run_windows = ["bin/popart.exe"]
+
+[[settings]]
+key = "levels"
+label = "Tone levels"
+type = "number"
+min = 2.0
+max = 5.0
+step = 1.0
+default = 4.0
+
+[[settings]]
+key = "outline"
+label = "Outline"
+type = "number"
+min = 0.0
+max = 1.0
+step = 0.01
+default = 0.5
+
+[[settings]]
+key = "dots"
+label = "Ben-Day dots"
+type = "number"
+min = 0.0
+max = 1.0
+step = 0.01
+default = 0.35

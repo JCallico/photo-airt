@@ -1,0 +1,86 @@
+# Photo·AIrt plug-in manifest: everything the app needs to list, describe
+# and run this style, read without running anything. Built into Photo·AIrt;
+# see docs/plugins.md, "Built-in styles are plug-ins too".
+protocol = 1
+id = "watercolor"
+name = "Watercolour"
+family = "Painterly"
+blurb = "Translucent washes, pooled pigment edges and a deckled paper border."
+technique = "Abstraction + wet-in-wet bleeding, Bousseau's pigment-density model for edge darkening, turbulence and granulation, XDoG pencil lines and a noise-carved vignette with splatter."
+version = "0.2.0"
+author = "Photo·AIrt"
+licence = "MIT"
+run = ["bin/watercolor"]
+run_windows = ["bin/watercolor.exe"]
+
+[[settings]]
+key = "abstraction"
+label = "Wash simplification"
+type = "number"
+min = 1.0
+max = 10.0
+step = 0.5
+default = 4.0
+
+[[settings]]
+key = "bleed"
+label = "Wet bleeding"
+type = "number"
+min = 0.0
+max = 1.0
+step = 0.01
+default = 0.5
+
+[[settings]]
+key = "edges"
+label = "Edge darkening"
+type = "number"
+min = 0.0
+max = 1.0
+step = 0.01
+default = 0.6
+
+[[settings]]
+key = "pigment"
+label = "Pigment turbulence"
+type = "number"
+min = 0.0
+max = 1.0
+step = 0.01
+default = 0.5
+
+[[settings]]
+key = "granulation"
+label = "Granulation"
+type = "number"
+min = 0.0
+max = 1.0
+step = 0.01
+default = 0.45
+
+[[settings]]
+key = "lines"
+label = "Pencil underdrawing"
+type = "number"
+min = 0.0
+max = 1.0
+step = 0.01
+default = 0.35
+
+[[settings]]
+key = "border"
+label = "Deckled border"
+type = "number"
+min = 0.0
+max = 1.0
+step = 0.01
+default = 0.7
+
+[[settings]]
+key = "lightness"
+label = "Transparency"
+type = "number"
+min = 0.0
+max = 1.0
+step = 0.01
+default = 0.35

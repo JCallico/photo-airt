@@ -2,16 +2,18 @@ mod ai;
 mod app;
 mod app_open;
 mod finish;
-mod imaging;
 mod photo_io;
+mod plugins;
 mod sources;
-mod styles;
 mod theme;
 mod ui_canvas;
 mod ui_open;
 mod ui_panels;
+mod ui_plugins;
 
 use std::path::PathBuf;
+
+use photo_airt_sdk::imaging;
 
 fn main() -> anyhow::Result<()> {
     let args: Vec<String> = std::env::args().collect();
@@ -20,6 +22,12 @@ fn main() -> anyhow::Result<()> {
     }
     if args.get(1).map(String::as_str) == Some("--ai") {
         return ai_cli(&args[2..]);
+    }
+    match args.get(1).map(String::as_str) {
+        Some("--check-plugin") => return check_plugin(&args[2..]),
+        Some("--run-plugin") => return run_builtin_plugin(&args[2..]),
+        Some("--plugins") => return list_plugins(),
+        _ => {}
     }
     // A path or a link (https://…) to open on start.
     let initial = args.get(1).filter(|a| !a.starts_with("--")).cloned();
@@ -45,12 +53,18 @@ fn headless(args: &[String]) -> anyhow::Result<()> {
     let long: usize = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(2048);
     let photo = imaging::Img::from_rgb8(&photo_io::load_photo(&input)?).fit_long(long);
     std::fs::create_dir_all(&out_dir)?;
-    for st in styles::STYLES.iter().filter(|s| style == "all" || s.id == style) {
-        let ctx = styles::Ctx::for_image(&photo, 7);
+    let registry = plugins::registry();
+    if style != "all" && registry.get(style).is_none() {
+        anyhow::bail!("unknown style {style}");
+    }
+    for plugin in registry.all().iter().filter(|p| style == "all" || p.id() == style) {
+        let ctx = plugins::Ctx::for_image(&photo, 7);
         let t = std::time::Instant::now();
-        let out = (st.render)(&photo, &styles::Params::defaults(st), &ctx).expect("render");
-        println!("{:<14} {:>6} ms", st.id, t.elapsed().as_millis());
-        out.to_rgb8().save(out_dir.join(format!("{}.jpg", st.id)))?;
+        let out = plugin
+            .render(&photo, &plugins::Params::defaults(plugin.description()), &ctx)
+            .map_err(|e| anyhow::anyhow!("{}: {e}", plugin.id()))?;
+        println!("{:<14} {:>6} ms", plugin.id(), t.elapsed().as_millis());
+        out.to_rgb8().save(out_dir.join(format!("{}.jpg", plugin.id())))?;
     }
     Ok(())
 }
@@ -132,4 +146,56 @@ fn resolve_input(arg: &str) -> anyhow::Result<PathBuf> {
         &cancel,
     )?;
     Ok(asset.local)
+}
+
+/// `photo-airt --check-plugin <folder>`: validate an external plug-in against
+/// the contract without approving it.
+fn check_plugin(args: &[String]) -> anyhow::Result<()> {
+    let dir = PathBuf::from(args.first().ok_or_else(|| anyhow::anyhow!("usage: photo-airt --check-plugin <plug-in folder>"))?);
+    let dir = std::fs::canonicalize(&dir).map_err(|e| anyhow::anyhow!("{}: {e}", dir.display()))?;
+    println!("Checking {}", dir.display());
+    let (report, ok) = plugins::external::check(&dir);
+    for (passed, line) in &report {
+        println!("  {} {line}", if *passed { "✓" } else { "✗" });
+    }
+    if ok {
+        println!("All checks passed.");
+        Ok(())
+    } else {
+        anyhow::bail!("the plug-in does not meet the contract")
+    }
+}
+
+/// `photo-airt --run-plugin <style-id> render <request.json>`: render a
+/// built-in style through the external plug-in contract, exactly as its
+/// standalone executable in `plugins/<id>` would.
+fn run_builtin_plugin(args: &[String]) -> anyhow::Result<()> {
+    let usage = "usage: photo-airt --run-plugin <style-id> render <request.json>";
+    let registry = plugins::Registry::builtin();
+    let id = args.first().ok_or_else(|| anyhow::anyhow!(usage))?;
+    let plugin = registry.get(id).ok_or_else(|| anyhow::anyhow!("unknown built-in style {id}"))?;
+    photo_airt_sdk::render_command(&args[1..], plugin.description(), |img, params, ctx| {
+        plugin.render(img, params, ctx).map_err(|e| e.to_string())
+    })
+    .map_err(|e| anyhow::anyhow!(e))
+}
+
+/// `photo-airt --plugins`: where plug-ins are looked for and what was found.
+fn list_plugins() -> anyhow::Result<()> {
+    let scan = plugins::external::scan(&plugins::Registry::builtin_ids(), &plugins::external::Trust::load());
+    println!("Plug-in locations (highest precedence first):");
+    for l in &scan.locations {
+        println!("  {} {:<22} {}", if l.exists { "●" } else { "○" }, l.kind.label(), l.path.display());
+    }
+    println!("Plug-ins:");
+    if scan.found.is_empty() {
+        println!("  (none)");
+    }
+    for f in &scan.found {
+        println!("  {:<24} {:<14} {}", f.name, format!("{:?}", f.status).split('(').next().unwrap_or(""), f.dir.display());
+        if let plugins::external::Status::Error(e) = &f.status {
+            println!("      {e}");
+        }
+    }
+    Ok(())
 }
