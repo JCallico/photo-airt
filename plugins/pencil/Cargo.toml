@@ -1,6 +1,6 @@
 [package]
 name = "photo-airt-pencil"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2024"
 description = "Graphite Sketch: a Photo·AIrt style plug-in"
 license = "MIT"
@@ -13,5 +13,5 @@ name = "pencil"
 path = "src/main.rs"
 
 [dependencies]
-photo-airt-sdk = { path = "../../sdk", version = "0.2.0" }
+photo-airt-sdk = { path = "../../sdk", version = "0.2.1" }
 rayon = "1.12"

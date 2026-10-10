@@ -80,7 +80,7 @@ pub fn user_folder() -> Option<PathBuf> {
 /// The portable folder next to the real (symlink-resolved) executable.
 pub fn portable_folder() -> Option<PathBuf> {
     let exe = std::env::current_exe().ok()?;
-    let exe = std::fs::canonicalize(&exe).unwrap_or(exe);
+    let exe = photo_io::canonicalize(&exe).unwrap_or(exe);
     exe.parent().map(|p| p.join("plugins"))
 }
 
@@ -132,18 +132,37 @@ impl Trust {
         dir.display().to_string()
     }
 
+    /// The same folder as Photo·AIrt 0.2.0 recorded it on Windows, with the
+    /// `\\?\` verbatim prefix, so those approvals stay valid.
+    fn legacy_key(dir: &Path) -> Option<String> {
+        let key = Self::key(dir);
+        if key.starts_with(r"\\?\") {
+            return None;
+        }
+        if let Some(share) = key.strip_prefix(r"\\") {
+            return Some(format!(r"\\?\UNC\{share}"));
+        }
+        let drive = key.as_bytes();
+        (drive.len() >= 3 && drive[0].is_ascii_alphabetic() && drive[1] == b':' && drive[2] == b'\\').then(|| format!(r"\\?\{key}"))
+    }
+
     pub fn approve(&mut self, dir: &Path, checksum: &str) {
+        self.revoke(dir);
         self.approved.insert(Self::key(dir), checksum.to_string());
     }
 
     pub fn revoke(&mut self, dir: &Path) {
         self.approved.remove(&Self::key(dir));
+        if let Some(legacy) = Self::legacy_key(dir) {
+            self.approved.remove(&legacy);
+        }
     }
 
     /// `None`: never approved. `Some(false)`: approved, but the plug-in has
     /// changed since. `Some(true)`: approved as it is now.
     pub fn verdict(&self, dir: &Path, checksum: &str) -> Option<bool> {
-        self.approved.get(&Self::key(dir)).map(|c| c == checksum)
+        let recorded = self.approved.get(&Self::key(dir)).or_else(|| Self::legacy_key(dir).and_then(|k| self.approved.get(&k)));
+        recorded.map(|c| c == checksum)
     }
 }
 
@@ -460,7 +479,7 @@ pub fn scan_locations(locations: Vec<Location>, builtin_ids: &[String], trust: &
             .collect();
         dirs.sort();
         for dir in dirs {
-            let dir = std::fs::canonicalize(&dir).unwrap_or(dir);
+            let dir = photo_io::canonicalize(&dir).unwrap_or(dir);
             let name = dir.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
             let mut f = Found {
                 dir: dir.clone(),
@@ -578,6 +597,24 @@ mod tests {
     const NEVER_RUNS: &str = "protocol = 1\nid = \"p\"\nname = \"P\"\nrun = [\"definitely-not-a-real-program-xyz\"]\n";
 
     #[test]
+    fn approvals_recorded_with_windows_verbatim_paths_still_count() {
+        let mut trust: Trust =
+            serde_json::from_str(r#"{"approved": {"\\\\?\\C:\\Users\\me\\plugins\\p": "abc", "\\\\?\\UNC\\nas\\plugins\\q": "def"}}"#)
+                .unwrap();
+        let (local, share) = (Path::new(r"C:\Users\me\plugins\p"), Path::new(r"\\nas\plugins\q"));
+        assert_eq!(trust.verdict(local, "abc"), Some(true));
+        assert_eq!(trust.verdict(local, "changed"), Some(false));
+        assert_eq!(trust.verdict(share, "def"), Some(true));
+        assert_eq!(trust.verdict(Path::new("/home/me/plugins/p"), "abc"), None);
+        // Approving again replaces the old entry rather than adding a second one.
+        trust.approve(local, "new");
+        assert_eq!(trust.approved.len(), 2);
+        assert_eq!(trust.approved.get(r"C:\Users\me\plugins\p").map(String::as_str), Some("new"));
+        trust.revoke(share);
+        assert_eq!(trust.verdict(share, "def"), None);
+    }
+
+    #[test]
     fn checksum_changes_with_any_file_and_ignores_caches() {
         let d = tmp("checksum");
         std::fs::write(d.join("plugin.toml"), NEVER_RUNS).unwrap();
@@ -613,7 +650,7 @@ mod tests {
         let p = root.join("p");
         std::fs::create_dir_all(&p).unwrap();
         std::fs::write(p.join("plugin.toml"), NEVER_RUNS).unwrap();
-        let dir = std::fs::canonicalize(&p).unwrap();
+        let dir = photo_io::canonicalize(&p).unwrap();
         let mut trust = Trust::default();
         trust.approve(&dir, &folder_checksum(&dir).unwrap());
         let s = scan_locations(vec![Location { kind: LocationKind::User, path: root, exists: true }], &[], &trust);

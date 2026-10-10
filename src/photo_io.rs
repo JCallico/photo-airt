@@ -102,3 +102,60 @@ pub fn save_unique(img: &image::RgbImage, dir: &Path, stem: &str) -> Result<Path
     img.save(&path).with_context(|| format!("saving {}", path.display()))?;
     Ok(path)
 }
+
+/// `std::fs::canonicalize`, but without Windows' `\\?\` verbatim prefix when
+/// the path means the same without it, so paths display and compare the way
+/// users write them.
+pub fn canonicalize(path: &Path) -> std::io::Result<PathBuf> {
+    let path = std::fs::canonicalize(path)?;
+    if cfg!(windows)
+        && let Some(plain) = path.to_str().and_then(strip_verbatim)
+    {
+        return Ok(PathBuf::from(plain));
+    }
+    Ok(path)
+}
+
+/// `\\?\C:\dir` → `C:\dir` and `\\?\UNC\server\share` → `\\server\share`, but
+/// only when the plain form is equivalent: shorter than `MAX_PATH`, and with
+/// no reserved device names or trailing dots or spaces, which the verbatim
+/// form allows and the plain form would reinterpret.
+pub fn strip_verbatim(path: &str) -> Option<String> {
+    let plain = if let Some(rest) = path.strip_prefix(r"\\?\UNC\") {
+        format!(r"\\{rest}")
+    } else {
+        let rest = path.strip_prefix(r"\\?\")?;
+        let drive = rest.as_bytes();
+        if !(drive.len() >= 3 && drive[0].is_ascii_alphabetic() && drive[1] == b':' && drive[2] == b'\\') {
+            return None;
+        }
+        rest.to_string()
+    };
+    const RESERVED: [&str; 4] = ["CON", "PRN", "AUX", "NUL"];
+    let reserved = |c: &str| {
+        let stem = c.split('.').next().unwrap_or("").trim_end().to_ascii_uppercase();
+        RESERVED.contains(&stem.as_str())
+            || ((stem.starts_with("COM") || stem.starts_with("LPT")) && stem.len() == 4 && stem.as_bytes()[3].is_ascii_digit())
+    };
+    let suspicious = plain.split('\\').filter(|c| !c.is_empty()).any(|c| reserved(c) || c.ends_with('.') || c.ends_with(' '));
+    (plain.len() < 260 && !suspicious).then_some(plain)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn verbatim_prefixes_are_removed_only_when_safe() {
+        assert_eq!(strip_verbatim(r"\\?\C:\Users\me\photo.jpg").as_deref(), Some(r"C:\Users\me\photo.jpg"));
+        assert_eq!(strip_verbatim(r"\\?\UNC\nas\photos\a.jpg").as_deref(), Some(r"\\nas\photos\a.jpg"));
+        assert_eq!(strip_verbatim(r"C:\already\plain"), None);
+        assert_eq!(strip_verbatim("/home/me/photo.jpg"), None);
+        assert_eq!(strip_verbatim(r"\\?\Volume{1234}\dir"), None, "no drive letter");
+        assert_eq!(strip_verbatim(r"\\?\C:\dir\CON"), None, "reserved device name");
+        assert_eq!(strip_verbatim(r"\\?\C:\dir\com1.txt"), None, "reserved device name with extension");
+        assert_eq!(strip_verbatim(r"\\?\C:\dir\name."), None, "trailing dot");
+        assert_eq!(strip_verbatim(&format!(r"\\?\C:\{}", "a".repeat(300))), None, "longer than MAX_PATH");
+        assert_eq!(strip_verbatim(r"\\?\C:\console\confirm.txt").as_deref(), Some(r"C:\console\confirm.txt"));
+    }
+}

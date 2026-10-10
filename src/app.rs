@@ -220,6 +220,14 @@ pub fn color_image(img: &Img) -> ColorImage {
 
 impl App {
     pub fn new(cc: &eframe::CreationContext<'_>, initial: Option<String>) -> Self {
+        // eframe restores egui's state from the last run even though this app
+        // no longer saves it (see `persist_egui_memory`); drop any left over
+        // by earlier versions, such as scroll positions, but keep the options.
+        cc.egui_ctx.memory_mut(|m| {
+            let options = m.options.clone();
+            *m = egui::Memory::default();
+            m.options = options;
+        });
         crate::theme::install(&cc.egui_ctx);
         let (tx, rx) = channel();
         let (ai_tx, ai_rx) = channel();
@@ -958,6 +966,14 @@ impl App {
 }
 
 impl eframe::App for App {
+    /// Start every session with fresh panels (scroll positions, open
+    /// sections) rather than egui's state from the last run; `App::new`
+    /// clears state saved by earlier versions. The window's size and
+    /// position are persisted separately and still restored.
+    fn persist_egui_memory(&self) -> bool {
+        false
+    }
+
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.pump();
         self.shortcuts(ui.ctx());

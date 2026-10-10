@@ -104,7 +104,7 @@ pub struct Asset {
 }
 
 pub fn local_asset(path: &Path) -> Result<Asset> {
-    let path = std::fs::canonicalize(path).with_context(|| format!("{} was not found", path.display()))?;
+    let path = crate::photo_io::canonicalize(path).with_context(|| format!("{} was not found", path.display()))?;
     if !path.is_file() {
         bail!("{} is not a file", path.display());
     }
@@ -683,7 +683,7 @@ mod tests {
         std::fs::write(&path, b"local test file").unwrap();
         let input = classify(&name);
         let asset = local_asset(&path);
-        let absolute = std::fs::canonicalize(&path).unwrap();
+        let absolute = crate::photo_io::canonicalize(&path).unwrap();
         std::fs::remove_file(&path).unwrap();
         assert_eq!(input, Ok(Input::File(path)));
         assert_eq!(asset.unwrap().local, absolute);

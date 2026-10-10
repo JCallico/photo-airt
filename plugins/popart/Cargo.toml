@@ -1,6 +1,6 @@
 [package]
 name = "photo-airt-popart"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2024"
 description = "Pop Art Quad: a Photo·AIrt style plug-in"
 license = "MIT"
@@ -13,4 +13,4 @@ name = "popart"
 path = "src/main.rs"
 
 [dependencies]
-photo-airt-sdk = { path = "../../sdk", version = "0.2.0" }
+photo-airt-sdk = { path = "../../sdk", version = "0.2.1" }
