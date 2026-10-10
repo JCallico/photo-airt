@@ -24,8 +24,12 @@ Claude Code or Codex CLIs.
 
 ## Preparing a release
 
-1. Update the package version in `Cargo.toml` and regenerate `Cargo.lock`.
-   Merge the change through a pull request after the required CI checks pass.
+1. Update the version everywhere it appears, then regenerate `Cargo.lock`:
+   the app's `Cargo.toml` (its own version and the `version` of each path
+   dependency), `sdk/Cargo.toml`, and each built-in style's `Cargo.toml` and
+   `plugin.toml` under `plugins/`. A unit test fails if a built-in style's
+   `plugin.toml` version differs from the app's. Merge the change through a
+   pull request after the required CI checks pass.
 2. Fetch `main` and tag the intended commit on `origin/main`. The tag must
    exactly match the package version, prefixed with `v` (for example,
    `v0.1.0`). For a prerelease, use a package version such as `0.2.0-beta.1`
