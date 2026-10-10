@@ -6,7 +6,8 @@ cold.
 
 **Statuses:** `Proposed` (idea, not yet designed) · `Design` (needs a design
 decision before coding) · `Ready` (designed, can be built) · `In progress` ·
-`Done` (move to the changelog or delete).
+`Done` (shipped; keep the item while its decision record is useful, otherwise
+delete it).
 
 **How to use this file**
 
@@ -23,7 +24,9 @@ decision before coding) · `Ready` (designed, can be built) · `In progress` ·
 
 ## BL-001 · Plug-in system for painting algorithms
 
-**Status:** Ready · **Area:** `src/styles/`, `src/app.rs`, UI, docs
+**Status:** Done (v0.2.0, with Windows refinements in v0.2.1) · **Area:**
+`src/plugins/`, `plugins/`, `sdk/`, UI, docs · **Guide:**
+[docs/plugins.md](docs/plugins.md)
 
 ### Summary
 
@@ -40,9 +43,9 @@ how-to guide are documented.
 
 - The application's value grows with the number of looks it can produce, and
   the maintainer cannot write every algorithm.
-- Today a style is a `StyleDef` entry in a static table. Adding one means
-  editing core files (`styles/mod.rs`, the family enum, the prompt catalogue),
-  so contributions are intrusive.
+- Before BL-001, a style was a `StyleDef` entry in a static table. Adding one
+  meant editing core files (`styles/mod.rs`, the family enum, the prompt
+  catalogue), so contributions were intrusive.
 - Making the built-ins use the same interface keeps the plug-in contract
   honest: if our own styles can't be expressed through it, outside authors
   can't either.
@@ -76,7 +79,7 @@ These are the requirements every plug-in must meet to work with the
 application. They are derived from how the built-in styles behave today and
 become the documented contract.
 
-**Identity and metadata (reported by the plug-in, D4)**
+**Identity and metadata (declared in the plug-in's `plugin.toml`, D4)**
 
 - A stable, unique `id`. It is referenced by saved recipes, `recents`, AI
   output and the command line, so it must never change between versions.
@@ -118,7 +121,8 @@ become the documented contract.
 - An external plug-in runs as a separate process with the user's permissions,
   so its behaviour is only as trustworthy as its author. The host therefore:
   - never runs a newly discovered plug-in without explicit approval, and
-    asks again if the executable changes (trust is pinned to its SHA-256);
+    asks again if any of its files change (trust is pinned to a SHA-256 of
+    the plug-in folder, D7);
   - starts it with a minimal environment and the plug-in's own folder as the
     working directory, and passes no secrets or credentials;
   - applies a per-render timeout and kills the process on cancel or timeout.
@@ -136,14 +140,13 @@ become the documented contract.
 - A plug-in is a self-contained folder inside one of the plug-in locations
   (D9): the user's plug-ins folder in the OS's standard data location, the
   portable `plugins` folder next to the executable, or a folder listed in
-  `PHOTO_AIRT_PLUGINS`. It
-  holds a manifest file (`plugin.toml`) and the executable it names, plus any
-  files the executable needs. Separate builds per OS and CPU are the author's
-  responsibility.
+  `PHOTO_AIRT_PLUGINS`. It holds a manifest file (`plugin.toml`, the plug-in's
+  complete description) and the program it names, plus any files that program
+  needs. Separate builds per OS and CPU are the author's responsibility.
 - Loading is automatic at startup and via a "Rescan" action, and invalid
   plug-ins are reported with a clear reason instead of being skipped silently.
-- Built-in plug-ins are embedded in the binary and can't be removed, but can
-  be shadowed or disabled.
+- Built-in plug-ins are embedded in the binary. An external plug-in can't
+  replace one by reusing its id (see D9).
 
 ### Decisions
 
@@ -203,24 +206,25 @@ authors and CI, and are not part of the release. No feature may require
 extra files to work out of the box.
 
 **D4 · Plug-ins describe themselves, including their settings** (decided
-2026-10-09). The app gets a plug-in's identity and its configuration settings
-(the controls shown in the right-hand Atelier panel) from the plug-in itself,
-not from a separate hand-written file that could drift out of date. This is a
-second kind of transaction under D2, `describe`:
+2026-10-09, revised 2026-10-10). The app gets a plug-in's identity and its
+configuration settings (the controls shown in the right-hand Atelier panel)
+from the plug-in itself, not from the app's code.
 
-1. The host starts the plug-in with a `describe` request.
-2. The plug-in answers with its metadata and settings schema.
-3. The plug-in exits.
+As shipped, the description lives in the plug-in's **`plugin.toml`
+manifest**: identity, gallery family, blurb, technique, version, author,
+licence, supported contract versions, an optional render timeout, the
+command to run and the settings. The app reads it without running anything,
+so the Plug-ins panel shows what a plug-in is and does before the user
+approves it. Built-in styles embed their own `plugin.toml` at compile time,
+so built-in and external styles are described the same way.
 
-Running code just to list it needs care, so:
-
-- A tiny `plugin.toml` names only the executable and a display name. That's
-  enough to list the plug-in and ask the user to approve it without running
-  anything.
-- `describe` runs only after approval. Its answer is cached, keyed by the
-  executable's SHA-256 checksum, so it isn't re-run on every launch, and it's
-  refreshed when the executable changes or on Rescan.
-- Built-in styles answer `describe` from compiled-in data (D3).
+*Revision:* the first design added a `describe` command: a second D2
+transaction whose answer was cached by checksum, with `plugin.toml` holding
+only a display name and the command. It was implemented, then removed before
+the first release in favour of the manifest. The manifest needs no process,
+cache or time limit just to list a plug-in, lets users review a plug-in
+before approving it, and keeps plug-in programs down to a single `render`
+command.
 
 **D5 · Images are exchanged as files in a per-render job folder** (decided
 2026-10-09). The app does not stream pixels through pipes. For each render
@@ -256,15 +260,19 @@ Consequences we accept:
 `color` or `text`) can be added later as additive protocol changes (D10).
 
 **D7 · Trust is approval plus SHA-256 pinning** (decided 2026-10-09). A
-plug-in never runs until the user approves it, and approval is pinned to the
-executable's SHA-256 checksum. Any change to the executable requires
+plug-in never runs until the user approves it, and approval is pinned to a
+SHA-256 checksum of every file in the plug-in folder (hidden files and
+`__pycache__` are skipped). Any change to the plug-in's files requires
 approving it again. Signed plug-ins, a curated index and OS-level sandboxing
 are out of scope for now; they may become separate backlog items later.
 
 **D8 · Plug-ins are self-contained** (decided 2026-10-09). The contract does
 not expose the host's internal primitives (blurs, flow fields, XDoG and so
-on) to plug-ins. A plug-in brings everything it needs. This keeps the
-contract small and stable, and lets plug-ins use any library they like.
+on) to plug-ins at run time. A plug-in brings everything it needs. This keeps
+the contract small and stable, and lets plug-ins use any library they like.
+Plug-ins written in Rust may compile in the `photo-airt-sdk` crate, which
+makes the built-in primitives part of the plug-in's own executable without
+adding any run-time dependency on the host.
 
 **D9 · Plug-ins are discovered in several folders** (decided 2026-10-09,
 extended the same day). The app scans these locations, in this order of
@@ -303,18 +311,18 @@ Each location holds one subfolder per plug-in. Rules:
   which plug-ins came from where. It also offers to create and open the user
   folder, because OS data folders are often hidden (for example `~/Library` on
   macOS and `%APPDATA%` on Windows).
-- Approvals (D7) are per plug-in *file* (location plus checksum), so the same
-  plug-in found in two places is approved separately. Approvals and the
-  `describe` cache (D4) live in the user's configuration and cache folders,
-  never inside a plug-ins folder.
+- Approvals (D7) are per plug-in *folder* (location plus checksum), so the
+  same plug-in found in two places is approved separately. Approvals live in
+  the user's configuration folder (`plugin-trust.json`), never inside a
+  plug-ins folder.
 
 **D10 · Contract versions are supported indefinitely** (decided 2026-10-09).
 Once published, a contract version is never dropped: a plug-in written for
 version 1 keeps working in every future Photo·AIrt release. Consequences:
 
 - Changes are additive whenever possible, such as new optional fields or new
-  setting types. A plug-in announces in `describe` which versions it speaks,
-  and the host uses the highest version both sides support.
+  setting types. A plug-in lists the versions it speaks in its manifest's
+  `protocol` field, and the host uses the highest version both sides support.
 - A genuinely incompatible change gets a new contract version number, and the
   host keeps implementing all earlier versions alongside it.
 - CI keeps example plug-ins for every published version, so a regression
@@ -328,23 +336,27 @@ version 1 keeps working in every future Photo·AIrt release. Consequences:
    single contract inside the app. The registry replaces the static `STYLES`
    table, and the UI, previews, export, `--render`, recents and the AI style
    catalogue all read from it.
-2. The fourteen built-in styles implement `StylePlugin` directly, in process.
-   They stay native Rust for speed and zero setup, and are registered exactly
-   like external plug-ins.
+2. The fourteen built-in styles run in process through `StylePlugin`. They
+   stay native Rust for speed and zero setup, and are registered exactly like
+   external plug-ins. Each lives in its own folder, `plugins/<id>/`, laid out
+   like an external plug-in: its `plugin.toml` plus a crate that embeds that
+   manifest, is linked into the app, and also builds a standalone executable.
+   Moved to a plug-ins location with its executable in `bin/`, the same
+   folder loads as an external plug-in.
 3. `ProcessPlugin` implements the same trait by talking to an external
    executable through the protocol, so the rest of the app cannot tell the
    difference.
-4. The protocol is proven by shipping example external plug-ins in the
-   repository, one in Rust and one in Python. CI runs the validator against
-   them.
+4. The protocol is proven by example external plug-ins in the repository,
+   Retro Print (Python) and Copperplate Engraving (Node.js), plus every
+   built-in style moved out as an external plug-in (Rust). CI runs the
+   validator against all of them.
 
 **Discovery and lifecycle**
 
 - The app reads `plugin.toml` without executing anything, so listing plug-ins
-  is always safe. It holds only the command to run and a display name.
-  Everything else (id, family, blurb, technique, version, author, licence,
-  supported protocol versions and settings) comes from the
-  plug-in's `describe` answer (D4), cached by checksum.
+  is always safe. It holds the plug-in's complete description (D4): id,
+  name, family, blurb, technique, version, author, licence, supported
+  protocol versions, settings, an optional timeout and the command to run.
 - Once the user has approved a plug-in, every render starts its executable
   fresh (D2) with the plug-in's folder as working directory. The request
   states the protocol version, and the plug-in must refuse versions it does
@@ -358,15 +370,17 @@ version 1 keeps working in every future Photo·AIrt release. Consequences:
 
 **Contract (version 1, sketch)**
 
-The contract is a command line, files in a job folder, and JSON Lines on
-stdout. stderr is captured into the studio log for debugging.
+The contract is a manifest, a command line, files in a job folder, and JSON
+Lines on stdout. The last lines of stderr are shown when a render fails, for
+debugging. The full reference is [docs/plugins.md](docs/plugins.md).
 
-*Describe* (D4): `<command> describe`
+*Manifest* (D4): `plugin.toml`
 
-- The plug-in prints one JSON object to stdout and exits with code 0.
-- The object holds: `protocol` (supported versions), `id`, `name`, `family`,
-  `blurb`, `technique`, `version`, `author`, `licence`, `settings` (the
-  schema; see "Identity and metadata") and an optional `timeout_seconds`.
+- Holds `protocol` (supported versions), `id`, `name`, `family`, `blurb`,
+  `technique`, `version`, `author`, `licence`, an optional
+  `timeout_seconds`, the `run` command (with optional `run_windows`,
+  `run_macos` and `run_linux`) and `[[settings]]` tables (the schema; see
+  "Identity and metadata").
 
 *Render* (D2, D5): `<command> render <job-folder>/request.json`
 
@@ -417,24 +431,26 @@ Other rules:
   `error` and exit.
 - It may only write its output file, temporary files inside the job folder,
   and files inside its own plug-in folder.
-- Possible later extensions, declared by the plug-in in `describe`:
+- Possible later extensions, declared by the plug-in in its manifest:
   - 16-bit or float images (for example TIFF or PFM) for plug-ins that need
     more precision;
   - passing the original full-resolution file at export.
 
 **SDKs (optional, thin)**
 
-- Small helper libraries (Rust crate, Python module) handle reading
-  `request.json`, printing progress lines and checking the output, so a
-  plug-in author only writes `render(image, params, ctx)`. They are optional:
-  a ten-line shell script around an existing tool is a valid plug-in.
+- Small helper libraries handle reading `request.json`, printing progress
+  lines and checking the output, so a plug-in author only writes
+  `render(image, params, ctx)`. They are optional: a ten-line shell script
+  around an existing tool is a valid plug-in. The Rust SDK shipped as
+  `photo-airt-sdk` (`sdk/`); a Python module is still to do.
 
 **Built-ins through the same protocol (optional)**
 
 - The executable can run any built-in style through the same contract, for
-  example `photo-airt --run-plugin oil render request.json` and
-  `photo-airt --run-plugin oil describe`. This tests the contract end to end
-  with no extra files, and gives authors a reference implementation (D3).
+  example `photo-airt --run-plugin oil render request.json`. This tests the
+  contract end to end with no extra files, and gives authors a reference
+  implementation (D3). Each built-in folder also builds its own standalone
+  executable.
 
 ### Comparison with existing plug-in ecosystems
 
@@ -445,7 +461,7 @@ their plug-ins can be reused.
 |---|---|---|---|---|
 | **What a "plug-in" is** | Any executable following a command-line contract | Mostly built-in operators (`-paint`, `-sketch`, …). True extensions are C modules (coders, `-process` filters) compiled against MagickCore | A library, not a plug-in host. Its "plugins" are internal back-ends (video I/O, GUI), not effects | Separate executables (C, Python 3, Scheme) that talk to GIMP over its own wire protocol using `libgimp` |
 | **Isolation** | Separate process per render | In-process (modules); separate process when called as a CLI | In-process (it's a library) | Separate process, but long-lived and calling back into GIMP |
-| **Describes its settings** | Yes: `describe` returns a settings schema (D4) | No machine-readable schema | No | Yes: plug-ins register procedures with typed arguments in GIMP's procedure database (closest to our D4) |
+| **Describes its settings** | Yes: `plugin.toml` declares a settings schema (D4) | No machine-readable schema | No | Yes: plug-ins register procedures with typed arguments in GIMP's procedure database (closest to our D4) |
 | **Data exchange** | Files plus JSON Lines | Files, or in-memory inside the library | In-memory arrays | Shared memory and tiles via `libgimp`; images live inside GIMP |
 | **Runs without the host app** | Yes, any plug-in can be run by hand on files | Yes (CLI) | Yes (it's a library) | No: a GIMP plug-in needs a running GIMP |
 | **Language** | Any | C for modules; any language via the CLI | C++, Python and others | C, Python 3, Scheme (Script-Fu) |
@@ -456,7 +472,7 @@ their plug-ins can be reused.
   catalogue to import, but because our contract is "read a file, write a
   file", a plug-in can be a short script that calls `magick` or uses OpenCV
   (for example `cv2.stylization`, `cv2.pencilSketch`, `cv2.edgePreservingFilter`)
-  and declares its settings in `describe`.
+  and declares its settings in `plugin.toml`.
 - **GIMP's own plug-ins can't run without GIMP**, because they depend on
   `libgimp` and GIMP's procedure database. Running GIMP headless as a bridge
   is possible but heavy and fragile, so it isn't recommended.
@@ -493,7 +509,7 @@ the BL-001 contract: a bridge is just an ordinary external plug-in.
 4. Plug-in discovery: a documented per-user folder, a rescan action, and a
    "Plug-ins" panel showing what is loaded, its version and its load errors.
 5. The external-process runtime (`ProcessPlugin`):
-   - the contract implementation (`describe`, `render`) and its version check;
+   - the contract implementation (manifest and `render`) and its version check;
    - one process per render: create the job folder, spawn, read progress and
      the result, enforce the exit status;
    - timeouts and cancellation;
@@ -503,7 +519,7 @@ the BL-001 contract: a bridge is just an ordinary external plug-in.
    - the full requirements list above;
    - a worked example plug-in;
    - the manifest and parameter schema reference;
-   - the host primitives available;
+   - the optional Rust SDK;
    - testing and debugging advice;
    - how to submit a plug-in to the project.
 7. A validation command, for example `photo-airt --check-plugin <path>`. It
@@ -540,11 +556,41 @@ the BL-001 contract: a bridge is just an ordinary external plug-in.
   plug-in following only the document.
 - CI runs the plug-in validation suite on all built-ins.
 
+### Delivered
+
+Shipped in v0.2.0 (#6), with Windows refinements in v0.2.1 (#7), as one pull
+request rather than the sequence planned under "Dependencies and risks".
+
+- **Registry and contract:** `StylePlugin`, the `Registry` (read by the
+  gallery, Atelier, previews, export, `--render`, recents and the Art
+  Director's catalogue) and the `plugin.toml` manifest (D4, revised).
+- **Built-in styles:** all fourteen in `plugins/<id>/`, with ids, setting keys
+  and defaults unchanged. `--render all` output is byte-identical to the
+  pre-conversion output.
+- **External runtime:** discovery in all three locations (D9), the Plug-ins
+  panel with Approve, Revoke and Rescan, checksum-pinned trust (D7), one
+  process per render (D2) with a private job folder (D5), timeouts and
+  cancellation.
+- **Tools:** `--plugins`, `--check-plugin <folder>` and
+  `--run-plugin <id> render <request.json>`.
+- **SDK:** `photo-airt-sdk` for Rust plug-ins.
+- **Docs and examples:** the authoring guide (`docs/plugins.md`), Retro Print
+  (Python) and Copperplate Engraving (Node.js). CI validates both, and every
+  built-in style moved out as an external plug-in, on Linux, macOS and
+  Windows.
+
+Acceptance criteria not yet met, as follow-ups:
+
+- The validator checks the manifest, the folder checksum, renders at two
+  sizes and determinism. It does not yet time cancellation or measure the
+  time and memory budgets.
+- Cancelling ends the plug-in's own process, but not processes it started
+  itself (process trees).
+- No Python SDK module yet.
+
 ### Open questions
 
-None. All design questions are resolved (D1–D10), so the item is **Ready**.
-Details such as exact JSON field names, error codes and UI wording are
-settled during implementation and documented in `docs/plugins.md`.
+None. All design questions are resolved (D1–D10).
 
 ### Dependencies and risks
 
@@ -598,7 +644,7 @@ available as Photo·AIrt styles without reimplementing them.
 
 - Bridges are optional external plug-ins. They require the user to have the
   tool installed and never ship inside the single executable (D3).
-- Each bridge reports clearly in `describe` or `error` when its tool is
+- Each bridge reports clearly with an `error` message when its tool is
   missing.
 - Respect each tool's licence. Calling them as separate programs keeps
   Photo·AIrt's MIT licence unaffected, but it should still be documented.
@@ -612,8 +658,8 @@ available as Photo·AIrt styles without reimplementing them.
 - Which filters to expose first, and how to map each tool's parameters to
   `number`, `toggle` and `choice` settings.
 - Should a bridge expose one plug-in per filter, or one plug-in with many
-  "styles"? This may need BL-001's `describe` to allow several styles per
-  executable.
+  "styles"? The latter would need BL-001's manifest to allow several styles
+  per plug-in folder.
 
 ---
 
