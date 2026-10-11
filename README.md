@@ -15,6 +15,8 @@ and run `photo-airt` (`photo-airt.exe` on Windows). Linux and Windows downloads
 are for x64; macOS has separate Apple Silicon and Intel downloads. The
 prebuilt executable does not need Rust.
 
+![The same studio on Linux, Windows and macOS](docs/screenshots/platforms.jpg)
+
 To build from source:
 
 You need a Rust toolchain (pinned in `mise.toml`, or any recent stable Rust).
@@ -161,7 +163,7 @@ install. Each one lives in its own folder under [`plugins/`](plugins), laid
 out like an external plug-in. Build its executable into the folder, move the
 folder to a plug-ins location, and it loads as an external plug-in.
 
-![The Plug-ins panel: where plug-ins are looked for, and each plug-in's status](docs/screenshots/plugins.jpg)
+![The Plug-ins panel on Windows: where plug-ins are looked for, and each plug-in's status](docs/screenshots/plugins.jpg)
 
 - **Where plug-ins live:** a plug-in is a folder with a `plugin.toml`. The app
   looks in folders listed in `PHOTO_AIRT_PLUGINS`, then your plug-ins folder
@@ -322,3 +324,5 @@ security issue, follow [SECURITY.md](SECURITY.md).
 
 [MIT](LICENSE) © 2026 Javier Callico. The bundled Inter and Playfair Display
 fonts are licensed under the SIL Open Font License 1.1 (`assets/fonts/`).
+The photos in the screenshots are public domain (CC0) images from Wikimedia
+Commons; see [docs/screenshots/CREDITS.md](docs/screenshots/CREDITS.md).
