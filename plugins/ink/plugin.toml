@@ -6,7 +6,7 @@ id = "ink"
 name = "Ink & Wash"
 family = "Drawing & Ink"
 blurb = "Crisp ink lines over a soft sumi wash."
-technique = "Winnemöller's eXtended Difference-of-Gaussians (XDoG) with a soft tanh threshold, over a posterised tonal wash."
+technique = "Winnemöller's eXtended Difference-of-Gaussians (XDoG) with a soft tanh threshold on an anisotropic Kuwahara abstraction, over a contrast-stretched posterised tonal wash."
 version = "0.2.2"
 author = "Photo·AIrt"
 licence = "MIT"
@@ -20,7 +20,7 @@ type = "number"
 min = 0.4
 max = 4.0
 step = 0.05
-default = 1.4
+default = 1.8
 
 [[settings]]
 key = "strength"
@@ -38,7 +38,7 @@ type = "number"
 min = 0.2
 max = 1.2
 step = 0.01
-default = 0.62
+default = 0.75
 
 [[settings]]
 key = "softness"
@@ -56,7 +56,7 @@ type = "number"
 min = 0.0
 max = 1.0
 step = 0.01
-default = 0.6
+default = 0.8
 
 [[settings]]
 key = "sepia"

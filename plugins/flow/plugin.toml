@@ -29,7 +29,7 @@ type = "number"
 min = 1.0
 max = 8.0
 step = 0.5
-default = 3.0
+default = 4.0
 
 [[settings]]
 key = "swirl"
@@ -38,7 +38,7 @@ type = "number"
 min = 2.0
 max = 24.0
 step = 0.5
-default = 9.0
+default = 14.0
 
 [[settings]]
 key = "vibrance"
@@ -65,4 +65,4 @@ type = "number"
 min = 0.0
 max = 1.0
 step = 0.01
-default = 0.55
+default = 0.3

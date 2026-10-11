@@ -140,7 +140,7 @@ animation reveals each new result.
 | Starry Flow | Line integral convolution of colour-jittered stroke noise along a smoothed tangent field |
 | Pointillism | Jittered dot placement, divisionist hue splitting, a detail pass |
 | Graphite Sketch, Ink & Wash, Cel Animation | Colour dodge with LIC hatching, XDoG, soft value quantisation |
-| Stained Glass, Low Poly, Pop Art Quad | Jump-flood Voronoi with chamfer-distance lead lines, Delaunay facets, posterised palettes |
+| Stained Glass, Low Poly, Pop Art Quad | SLIC superpixel panes with chamfer-distance lead lines, Delaunay facets, posterised palettes |
 | CMYK Halftone, Risograph, Pixel Art | Rotated AM screens, least-squares two-ink separation, k-means++ palette with Bayer dithering |
 
 Each style's settings appear as controls in the **Atelier** panel. Every

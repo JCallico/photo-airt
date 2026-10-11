@@ -6,7 +6,7 @@ id = "stained_glass"
 name = "Stained Glass"
 family = "Geometric"
 blurb = "Leaded glass panes glowing with the colours of your scene."
-technique = "Detail-adaptive Voronoi tessellation by jump flooding, per-cell colour averaging, chamfer distance-field lead came and glass texture."
+technique = "Detail-adaptive SLIC superpixel panes that follow the edges of the scene, per-pane colour averaging, chamfer distance-field lead came and glass texture."
 version = "0.2.2"
 author = "Photo·AIrt"
 licence = "MIT"
@@ -20,7 +20,7 @@ type = "number"
 min = 8.0
 max = 90.0
 step = 1.0
-default = 30.0
+default = 64.0
 
 [[settings]]
 key = "adaptivity"

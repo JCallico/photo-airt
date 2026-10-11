@@ -22,20 +22,27 @@ pub fn render(src: &Img, p: &Params, ctx: &Ctx) -> Option<Img> {
     let sat = p.get("saturation");
     let base = blur_img(src, spacing * 0.5);
     // Toned ground: gaps between dabs read as underpainting, not bare paper.
-    let mut canvas = blur_img(&base, spacing * 2.0).map(|c| mix(c, [0.96, 0.94, 0.88], 0.3));
+    let mut canvas = blur_img(&base, spacing * 2.0).map(|c| mix(c, [0.96, 0.94, 0.88], 0.12));
     let mut rng = Rng::new(ctx.seed);
 
     let dab = |rng: &mut Rng, x: f32, y: f32| -> Rgb {
         let c = saturate(base.sample(x, y), sat);
+        let target = luma(c) * (1.0 + rng.range(-jitter, jitter));
         let mut hsv = rgb_to_hsv(c);
         hsv[0] += rng.range(-jitter, jitter) * 0.3;
-        hsv[2] *= 1.0 + rng.range(-jitter, jitter);
         if rng.f32() < div {
             // Divisionism: split the colour into neighbouring pure hues.
             hsv[0] += if rng.f32() < 0.5 { 0.07 } else { -0.07 };
             hsv[1] = (hsv[1] * 1.4).min(1.0);
         }
-        clamp01(hsv_to_rgb(hsv))
+        // Hue and chroma vary from dab to dab but lightness follows the
+        // photo, so the dabs blend in the eye instead of reading as speckle.
+        let d = hsv_to_rgb(hsv);
+        let d = clamp01(scale(d, target / luma(d).max(1e-3)));
+        // Deep hues that cannot get light enough by scaling are tinted
+        // towards white instead.
+        let short = target - luma(d);
+        if short > 1e-3 { mix(d, [1.0; 3], (short / (1.0 - luma(d)).max(1e-3)).min(1.0)) } else { d }
     };
 
     let mut pts = Vec::new();
