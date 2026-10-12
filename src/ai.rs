@@ -19,7 +19,7 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc::Sender;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Instant;
 
 use anyhow::{Context, Result, anyhow, bail};
@@ -758,10 +758,28 @@ fn collect_stderr(child: &mut Child) -> std::thread::JoinHandle<String> {
     })
 }
 
+/// Keeps headless runs out of the user's resumable sessions. Older Claude Code
+/// builds (e.g. 2.0.x) reject it as an unknown option, so it is optional.
+const NO_SESSION_PERSISTENCE: &str = "--no-session-persistence";
+
+/// Whether the installed `claude` lists `flag` in its help (probed once).
+fn claude_supports(flag: &str) -> bool {
+    static HELP: OnceLock<String> = OnceLock::new();
+    help_lists_flag(HELP.get_or_init(|| run_quiet("claude", &["--help"]).unwrap_or_default()), flag)
+}
+
+/// Whether CLI help text documents `flag` as an option of its own.
+fn help_lists_flag(help: &str, flag: &str) -> bool {
+    help.split(|c: char| c.is_whitespace() || c == ',').any(|w| w == flag)
+}
+
 /// `claude -p` with streamed JSON events; returns the final result text.
 fn run_claude(prompt: &str, dir: &Path, model: &str, sh: &Arc<Mutex<JobShared>>, ctx: &egui::Context) -> Result<String> {
     let mut cmd = Command::new("claude");
-    cmd.args(["-p", "--output-format", "stream-json", "--verbose", "--no-session-persistence"]);
+    cmd.args(["-p", "--output-format", "stream-json", "--verbose"]);
+    if claude_supports(NO_SESSION_PERSISTENCE) {
+        cmd.arg(NO_SESSION_PERSISTENCE);
+    }
     if !model.is_empty() {
         cmd.args(["--model", model]);
     }
@@ -959,6 +977,16 @@ fn find_codex_image(thread_id: Option<&str>) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn help_flag_detection() {
+        let new = "  --no-session-persistence              Disable session persistence\n  --session-id <uuid>  Use a session ID";
+        let old = "  --session-id <uuid>  Use a session ID\n  --allowedTools, --allowed-tools <tools...>  Allow tools";
+        assert!(help_lists_flag(new, NO_SESSION_PERSISTENCE));
+        assert!(!help_lists_flag(old, NO_SESSION_PERSISTENCE));
+        assert!(help_lists_flag(old, "--allowedTools"));
+        assert!(!help_lists_flag("", NO_SESSION_PERSISTENCE));
+    }
 
     fn found(image_gen: bool, models: &[&str]) -> CliStatus {
         CliStatus {
