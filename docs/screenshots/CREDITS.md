@@ -18,6 +18,6 @@ Windows (`open-anywhere.jpg`, `plugins.jpg`) and macOS (`all-photos.jpg`,
 `gallery-ai-studio.jpg`); `platforms.jpg` shows the studio on all three.
 
 `styles-grid.jpg` is `photo-airt --render all` on `burano.jpg` with default
-settings. `ai-results.jpg` shows real AI jobs on the same photo
+settings (all ten styles). `ai-results.jpg` shows real AI jobs on the same photo
 (`photo-airt --ai duet`, `--ai vector`, and `--ai repaint` with Claude as the
 painter).

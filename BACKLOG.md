@@ -664,3 +664,32 @@ available as Photo·AIrt styles without reimplementing them.
 ---
 
 _Add new items below this line._
+
+---
+
+## BL-003 · Curate the built-in styles around what algorithms do best
+
+**Status:** Done (v0.4.0) · **Area:** built-in styles
+
+The AI Studio now beats the algorithms at loose painterly reinterpretation
+(Van Gogh swirls, pop art, anime). The built-ins keep what algorithms do
+better: instant, adjustable, repeatable results faithful to the photo, and
+exact print and pixel structure that image models only imitate.
+
+**Decision (2026-10-12):**
+
+- Keep: Oil on Canvas (anisotropic Kuwahara), Impressionist Strokes
+  (Hertzmann 1998), Watercolour (Curtis 1997, Bousseau 2006; now with a
+  vibrance setting), Scratchboard, Stained Glass (SLIC), Low Poly (Delaunay),
+  CMYK Halftone and Pixel Art.
+- Rework: Graphite Sketch now follows Lu, Xu & Jia, "Combining Sketch and
+  Tone for Pencil Drawing Production" (NPAR 2012).
+- Merge: Ink & Wash and Cel Animation into Ink & Toon (`ink_toon`), one
+  abstraction-and-outline pipeline with a colour blend.
+- Retire: Starry Flow, Pop Art Quad, Pointillism and Risograph. Their code
+  remains in git history before v0.4.0 and could return as external
+  plug-ins. Backwards compatibility of their ids and setting keys was
+  explicitly waived because the app has a single user.
+
+**Possible follow-up:** Weighted Voronoi stippling (Secord 2002) as a
+precise black-ink dot style.

@@ -22,6 +22,15 @@ pub fn render(src: &Img, p: &Params, ctx: &Ctx) -> Option<Img> {
     ctx.progress(0.02);
     let flow = flow_field(src, ctx.px(2.0));
     let abs = akf(src, &flow, ctx.px(p.get("abstraction")).max(1.2), 6.0, 1.0, ctx, 0.05, 0.45)?;
+    // Pigments are purer than a photo's colours: boost chroma before the
+    // washes, which otherwise lighten everything towards a matte look.
+    let vibrance = p.get("vibrance");
+    let abs = abs.map(|c| {
+        let mut hsv = rgb_to_hsv(c);
+        hsv[1] = (hsv[1] * (1.0 + vibrance)).min(1.0);
+        hsv[2] = hsv[2].powf(1.0 + 0.25 * vibrance);
+        hsv_to_rgb(hsv)
+    });
 
     let bleed = p.get("bleed");
     let soft = blur_img(&abs, ctx.px(7.0));
