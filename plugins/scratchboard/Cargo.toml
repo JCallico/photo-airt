@@ -1,0 +1,17 @@
+[package]
+name = "photo-airt-scratchboard"
+version = "0.2.2"
+edition = "2024"
+description = "Scratchboard: a Photo·AIrt style plug-in"
+license = "MIT"
+authors = ["Javier Callico"]
+repository = "https://github.com/JCallico/photo-airt"
+publish = false
+
+[[bin]]
+name = "scratchboard"
+path = "src/main.rs"
+
+[dependencies]
+photo-airt-sdk = { path = "../../sdk", version = "0.2.2" }
+rayon = "1.12"

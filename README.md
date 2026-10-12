@@ -125,14 +125,14 @@ Downloaded and pasted photos are cached in `~/.cache/photo-airt/sources`.
 Cached copies that are no longer among your recents are cleaned up
 automatically.
 
-## Fourteen algorithmic styles
+## Fifteen algorithmic styles
 
 Every style is written from scratch in Rust and runs on all cores with rayon.
 The cards in the style gallery show live previews of *your* photo. Selecting
 one renders it at working resolution in a second or two. A paint-sweep
 animation reveals each new result.
 
-![The same photo in twelve of the fourteen styles](docs/screenshots/styles-grid.jpg)
+![The same photo in twelve of the fifteen styles](docs/screenshots/styles-grid.jpg)
 
 | Style | Technique |
 |---|---|
@@ -142,6 +142,7 @@ animation reveals each new result.
 | Starry Flow | Line integral convolution of colour-jittered stroke noise along a smoothed tangent field |
 | Pointillism | Jittered dot placement, divisionist hue splitting, a detail pass |
 | Graphite Sketch, Ink & Wash, Cel Animation | Colour dodge with LIC hatching, XDoG, soft value quantisation |
+| Scratchboard | Night tone mapping (blue skies and water to ink), flow-aligned scratch thresholding, XDoG contours, sun rays and stars, navy-to-cream ink ramp |
 | Stained Glass, Low Poly, Pop Art Quad | SLIC superpixel panes with chamfer-distance lead lines, Delaunay facets, posterised palettes |
 | CMYK Halftone, Risograph, Pixel Art | Rotated AM screens, least-squares two-ink separation, k-means++ palette with Bayer dithering |
 
@@ -157,7 +158,7 @@ language. A plug-in's `plugin.toml` describes it (name, gallery group,
 description and settings), and Photo·AIrt turns its settings into sliders,
 toggles and drop-downs in the Atelier panel. Plug-in styles get live
 previews, the finish layer, export and Art Director recipes, just like the
-built-in ones. The 14 built-in styles use the same plug-in interface, compiled
+built-in ones. The 15 built-in styles use the same plug-in interface, compiled
 into the single executable, so the app works out of the box with nothing to
 install. Each one lives in its own folder under [`plugins/`](plugins), laid
 out like an external plug-in. Build its executable into the folder, move the

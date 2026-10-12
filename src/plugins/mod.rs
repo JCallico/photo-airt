@@ -1,6 +1,6 @@
 //! The plug-in system for painting styles (BL-001).
 //!
-//! Every style — the fourteen built-in ones compiled into this executable and
+//! Every style — the fifteen built-in ones compiled into this executable and
 //! the external plug-ins — is a [`StylePlugin`]: it *describes itself*
 //! (identity plus the settings the Atelier panel shows, decision D4) and
 //! renders an image. The rest of the app only ever talks to the
@@ -182,11 +182,11 @@ mod tests {
     #[test]
     fn builtin_registry_is_valid_and_complete() {
         let reg = Registry::builtin();
-        assert_eq!(reg.all().len(), 14);
+        assert_eq!(reg.all().len(), 15);
         let mut ids: Vec<_> = reg.all().iter().map(|p| p.id().to_string()).collect();
         ids.sort();
         ids.dedup();
-        assert_eq!(ids.len(), 14, "ids must be unique");
+        assert_eq!(ids.len(), 15, "ids must be unique");
         for p in reg.all() {
             p.description().validate().unwrap_or_else(|e| panic!("{e}"));
         }

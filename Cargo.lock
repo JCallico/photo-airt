@@ -2928,6 +2928,7 @@ dependencies = [
  "photo-airt-pointillism",
  "photo-airt-popart",
  "photo-airt-riso",
+ "photo-airt-scratchboard",
  "photo-airt-sdk",
  "photo-airt-stained-glass",
  "photo-airt-toon",
@@ -3022,6 +3023,14 @@ dependencies = [
 
 [[package]]
 name = "photo-airt-riso"
+version = "0.2.2"
+dependencies = [
+ "photo-airt-sdk",
+ "rayon",
+]
+
+[[package]]
+name = "photo-airt-scratchboard"
 version = "0.2.2"
 dependencies = [
  "photo-airt-sdk",
