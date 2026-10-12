@@ -1,7 +1,7 @@
 # Writing Photo·AIrt plug-ins
 
 A plug-in adds a painting style to Photo·AIrt. It appears in the style gallery
-next to the 15 built-in styles, with live previews, sliders in the Atelier
+next to the 10 built-in styles, with live previews, sliders in the Atelier
 panel, the finish layer, export and Art Director recipes, exactly like a
 built-in style.
 
@@ -317,7 +317,7 @@ That makes the app itself a reference implementation.
 
 ## Built-in styles are plug-ins too
 
-The 15 built-in styles are written exactly like external plug-ins. Each one
+The 10 built-in styles are written exactly like external plug-ins. Each one
 has its own folder under [`plugins/`](../plugins) with the same layout:
 
 ```text

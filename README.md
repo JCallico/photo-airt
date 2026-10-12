@@ -125,26 +125,25 @@ Downloaded and pasted photos are cached in `~/.cache/photo-airt/sources`.
 Cached copies that are no longer among your recents are cleaned up
 automatically.
 
-## Fifteen algorithmic styles
+## Ten algorithmic styles
 
 Every style is written from scratch in Rust and runs on all cores with rayon.
 The cards in the style gallery show live previews of *your* photo. Selecting
 one renders it at working resolution in a second or two. A paint-sweep
 animation reveals each new result.
 
-![The same photo in twelve of the fifteen styles](docs/screenshots/styles-grid.jpg)
+![The same photo in all ten styles](docs/screenshots/styles-grid.jpg)
 
 | Style | Technique |
 |---|---|
 | Oil on Canvas | Anisotropic Kuwahara filter with polynomial sector weights, structure-tensor flow, impasto relighting |
 | Impressionist Strokes | Hertzmann multi-layer curved brush strokes, bristle texture, height-map relief (painted in parallel bands, stroke order preserved) |
-| Watercolour | Abstraction, wet-in-wet bleeding, Bousseau pigment-density model, granulation, XDoG underdrawing, deckled border and splatter |
-| Starry Flow | Line integral convolution of colour-jittered stroke noise along a smoothed tangent field |
-| Pointillism | Jittered dot placement, divisionist hue splitting, a detail pass |
-| Graphite Sketch, Ink & Wash, Cel Animation | Colour dodge with LIC hatching, XDoG, soft value quantisation |
+| Watercolour | Abstraction, pigment vibrance, wet-in-wet bleeding, Bousseau pigment-density model, granulation, XDoG underdrawing, deckled border and splatter |
+| Graphite Sketch | Lu, Xu & Jia pencil drawing: direction-classified strokes, histogram matching to a pencil tone model, hatching rendered to tone |
+| Ink & Toon | Kuwahara abstraction and XDoG outlines, from a contrast-stretched ink wash to HSV cel shading |
 | Scratchboard | Night tone mapping (blue skies and water to ink), flow-aligned scratch thresholding, XDoG contours, sun rays and stars, navy-to-cream ink ramp |
-| Stained Glass, Low Poly, Pop Art Quad | SLIC superpixel panes with chamfer-distance lead lines, Delaunay facets, posterised palettes |
-| CMYK Halftone, Risograph, Pixel Art | Rotated AM screens, least-squares two-ink separation, k-means++ palette with Bayer dithering |
+| Stained Glass, Low Poly | SLIC superpixel panes with chamfer-distance lead lines; edge-weighted Delaunay facets |
+| CMYK Halftone, Pixel Art | Rotated AM screens with ink misregistration; k-means++ palette with Bayer dithering |
 
 Each style's settings appear as controls in the **Atelier** panel. Every
 artwork, including AI results, also gets a non-destructive **Finish** layer:
@@ -158,7 +157,7 @@ language. A plug-in's `plugin.toml` describes it (name, gallery group,
 description and settings), and Photo·AIrt turns its settings into sliders,
 toggles and drop-downs in the Atelier panel. Plug-in styles get live
 previews, the finish layer, export and Art Director recipes, just like the
-built-in ones. The 15 built-in styles use the same plug-in interface, compiled
+built-in ones. The 10 built-in styles use the same plug-in interface, compiled
 into the single executable, so the app works out of the box with nothing to
 install. Each one lives in its own folder under [`plugins/`](plugins), laid
 out like an external plug-in. Build its executable into the folder, move the

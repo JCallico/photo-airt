@@ -2909,7 +2909,7 @@ dependencies = [
 
 [[package]]
 name = "photo-airt"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "arboard",
@@ -2918,20 +2918,15 @@ dependencies = [
  "egui",
  "image",
  "photo-airt-brush",
- "photo-airt-flow",
  "photo-airt-halftone",
- "photo-airt-ink",
+ "photo-airt-ink-toon",
  "photo-airt-lowpoly",
  "photo-airt-oil",
  "photo-airt-pencil",
  "photo-airt-pixel",
- "photo-airt-pointillism",
- "photo-airt-popart",
- "photo-airt-riso",
  "photo-airt-scratchboard",
  "photo-airt-sdk",
  "photo-airt-stained-glass",
- "photo-airt-toon",
  "photo-airt-watercolor",
  "rayon",
  "resvg",
@@ -2946,15 +2941,7 @@ dependencies = [
 
 [[package]]
 name = "photo-airt-brush"
-version = "0.3.0"
-dependencies = [
- "photo-airt-sdk",
- "rayon",
-]
-
-[[package]]
-name = "photo-airt-flow"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "photo-airt-sdk",
  "rayon",
@@ -2962,21 +2949,21 @@ dependencies = [
 
 [[package]]
 name = "photo-airt-halftone"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "photo-airt-sdk",
 ]
 
 [[package]]
-name = "photo-airt-ink"
-version = "0.3.0"
+name = "photo-airt-ink-toon"
+version = "0.4.0"
 dependencies = [
  "photo-airt-sdk",
 ]
 
 [[package]]
 name = "photo-airt-lowpoly"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "delaunator",
  "photo-airt-sdk",
@@ -2985,7 +2972,7 @@ dependencies = [
 
 [[package]]
 name = "photo-airt-oil"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "photo-airt-sdk",
  "rayon",
@@ -2993,7 +2980,7 @@ dependencies = [
 
 [[package]]
 name = "photo-airt-pencil"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "photo-airt-sdk",
  "rayon",
@@ -3001,29 +2988,7 @@ dependencies = [
 
 [[package]]
 name = "photo-airt-pixel"
-version = "0.3.0"
-dependencies = [
- "photo-airt-sdk",
- "rayon",
-]
-
-[[package]]
-name = "photo-airt-pointillism"
-version = "0.3.0"
-dependencies = [
- "photo-airt-sdk",
-]
-
-[[package]]
-name = "photo-airt-popart"
-version = "0.3.0"
-dependencies = [
- "photo-airt-sdk",
-]
-
-[[package]]
-name = "photo-airt-riso"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "photo-airt-sdk",
  "rayon",
@@ -3031,7 +2996,7 @@ dependencies = [
 
 [[package]]
 name = "photo-airt-scratchboard"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "photo-airt-sdk",
  "rayon",
@@ -3039,7 +3004,7 @@ dependencies = [
 
 [[package]]
 name = "photo-airt-sdk"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "image",
  "rayon",
@@ -3050,22 +3015,15 @@ dependencies = [
 
 [[package]]
 name = "photo-airt-stained-glass"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "photo-airt-sdk",
  "rayon",
 ]
 
 [[package]]
-name = "photo-airt-toon"
-version = "0.3.0"
-dependencies = [
- "photo-airt-sdk",
-]
-
-[[package]]
 name = "photo-airt-watercolor"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "photo-airt-sdk",
  "rayon",
