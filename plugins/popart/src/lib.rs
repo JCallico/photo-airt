@@ -26,6 +26,10 @@ pub fn render(src: &Img, p: &Params, ctx: &Ctx) -> Option<Img> {
     let (qw, qh) = (((w - gap * 3) / 2).max(8), ((h - gap * 3) / 2).max(8));
     let small = src.resize_exact(qw, qh, FilterType::Triangle);
     let sctx_px = ctx.px(1.0) * qw as f32 / w as f32 * 2.0;
+    // Edge-preserving abstraction first, so busy texture (foliage, gravel)
+    // posterises into clean shapes rather than confetti.
+    let flow = flow_field(&small, (sctx_px * 2.0).max(1.0));
+    let small = akf(&small, &flow, (sctx_px * 4.0).max(1.5), 8.0, 1.0, ctx, 0.02, 0.35)?;
     let l = blur(&small.luma(), qw, qh, (sctx_px * 1.2).max(0.5));
     let mut sorted = l.clone();
     sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());

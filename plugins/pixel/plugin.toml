@@ -7,7 +7,7 @@ name = "Pixel Art"
 family = "Print & Pixel"
 blurb = "A limited-palette sprite of your photo, 16-bit style."
 technique = "Area downsampling, k-means++ palette extraction, ordered Bayer dithering and sprite outlines."
-version = "0.2.2"
+version = "0.3.0"
 author = "Photo·AIrt"
 licence = "MIT"
 run = ["bin/pixel"]
@@ -20,7 +20,7 @@ type = "number"
 min = 2.0
 max = 24.0
 step = 1.0
-default = 7.0
+default = 6.0
 
 [[settings]]
 key = "colors"
@@ -29,7 +29,7 @@ type = "number"
 min = 2.0
 max = 32.0
 step = 1.0
-default = 14.0
+default = 16.0
 
 [[settings]]
 key = "dither"
@@ -38,7 +38,7 @@ type = "number"
 min = 0.0
 max = 1.0
 step = 0.01
-default = 0.45
+default = 0.3
 
 [[settings]]
 key = "outline"

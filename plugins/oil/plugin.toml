@@ -7,7 +7,7 @@ name = "Oil on Canvas"
 family = "Painterly"
 blurb = "Thick, sculpted paint that follows the forms of your photo."
 technique = "Anisotropic Kuwahara filter with polynomial sector weights (Kyprianidis 2010) steered by a smoothed structure tensor, then relit as impasto."
-version = "0.2.2"
+version = "0.3.0"
 author = "Photo·AIrt"
 licence = "MIT"
 run = ["bin/oil"]
@@ -47,7 +47,7 @@ type = "number"
 min = 0.0
 max = 1.0
 step = 0.01
-default = 0.45
+default = 0.35
 
 [[settings]]
 key = "saturation"

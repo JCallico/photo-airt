@@ -7,7 +7,7 @@ name = "Impressionist Strokes"
 family = "Painterly"
 blurb = "Thousands of curved bristle strokes laid down coarse to fine."
 technique = "Hertzmann's multi-layer curved brush-stroke painter (SIGGRAPH '98) with structure-tensor stroke guidance, bristle texture and an impasto height map."
-version = "0.2.2"
+version = "0.3.0"
 author = "Photo·AIrt"
 licence = "MIT"
 run = ["bin/brush"]
@@ -20,7 +20,7 @@ type = "number"
 min = 4.0
 max = 40.0
 step = 1.0
-default = 16.0
+default = 20.0
 
 [[settings]]
 key = "layers"
@@ -38,7 +38,7 @@ type = "number"
 min = 0.02
 max = 0.3
 step = 0.005
-default = 0.09
+default = 0.07
 
 [[settings]]
 key = "length"
@@ -83,4 +83,4 @@ type = "number"
 min = 0.0
 max = 1.0
 step = 0.01
-default = 0.5
+default = 0.35

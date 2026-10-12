@@ -17,7 +17,7 @@
     `PROTOCOL`.
   - `serve.rs` is the plug-in side of the external contract (`serve`,
     `render_command`), so any Rust style can run as a standalone plug-in.
-- `plugins/<id>/` holds the 14 built-in styles, one folder each, laid out like
+- `plugins/<id>/` holds the 15 built-in styles, one folder each, laid out like
   an external plug-in: `plugin.toml` (the description and settings; runs
   `bin/<id>`), plus a crate whose `src/lib.rs` embeds that `plugin.toml` as
   its description and has the style's `render`, and whose `src/main.rs` is

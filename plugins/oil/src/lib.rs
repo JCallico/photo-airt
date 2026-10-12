@@ -23,9 +23,12 @@ pub fn render(src: &Img, p: &Params, ctx: &Ctx) -> Option<Img> {
     let sat = p.get("saturation");
     let out = out.map(|c| saturate(c, sat));
 
-    // Brush ridges: noise smeared along the flow becomes the height map.
+    // Brush ridges: noise smeared along the flow becomes the height map. The
+    // ridges follow a smoother field taken from the painting itself, so flat
+    // areas (skin, sky) get long coherent strokes rather than crinkles.
+    let ridge_flow = flow_field(&out, ctx.px(12.0));
     let noise = streak_noise(w, h, (radius * 0.35).max(1.0), ctx.seed32());
-    let streak = lic(&noise, &flow, w, h, radius * 1.6);
+    let streak = lic(&noise, &ridge_flow, w, h, radius * 2.0);
     let lum = out.luma();
     let height: Vec<f32> = lum.par_iter().zip(streak.par_iter()).map(|(l, s)| 0.55 * l + 0.45 * (s - 0.5) * 2.2).collect();
     let height = blur(&height, w, h, 0.7);

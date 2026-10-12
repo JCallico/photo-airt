@@ -7,7 +7,7 @@ name = "Low Poly"
 family = "Geometric"
 blurb = "Faceted triangles that crystallise the scene."
 technique = "Edge-weighted point sampling, Delaunay triangulation and per-facet colour with directional facet lighting."
-version = "0.2.2"
+version = "0.3.0"
 author = "Photo·AIrt"
 licence = "MIT"
 run = ["bin/lowpoly"]
@@ -20,7 +20,7 @@ type = "number"
 min = 200.0
 max = 8000.0
 step = 50.0
-default = 1800.0
+default = 2800.0
 
 [[settings]]
 key = "focus"
@@ -38,7 +38,7 @@ type = "number"
 min = 0.0
 max = 1.0
 step = 0.01
-default = 0.3
+default = 0.25
 
 [[settings]]
 key = "outline"

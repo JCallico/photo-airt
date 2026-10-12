@@ -20,7 +20,9 @@ pub fn render(src: &Img, p: &Params, ctx: &Ctx) -> Option<Img> {
     let q = p.get("levels").round().max(2.0);
     let sat = p.get("saturation");
     let outline = p.get("outline");
-    let l = blur(&src.luma(), w, h, ctx.px(0.6).max(0.5));
+    // Outlines come from the abstracted image, so photo texture (skin pores,
+    // foliage, clouds) does not turn into speckle.
+    let l = abs.luma();
     let e = xdog(&l, w, h, ctx.px(1.3).max(0.7), 24.0, 0.86, 30.0);
     let out = abs.map_xy(|x, y, c| {
         let mut hsv = rgb_to_hsv(c);

@@ -7,7 +7,7 @@ name = "Starry Flow"
 family = "Painterly"
 blurb = "Swirling, rhythmic strokes in the spirit of Van Gogh."
 technique = "Line integral convolution of colour-jittered stroke noise along a heavily smoothed edge-tangent flow, with tone banding and relief lighting."
-version = "0.2.2"
+version = "0.3.0"
 author = "Photo·AIrt"
 licence = "MIT"
 run = ["bin/flow"]
@@ -29,7 +29,7 @@ type = "number"
 min = 1.0
 max = 8.0
 step = 0.5
-default = 3.0
+default = 4.0
 
 [[settings]]
 key = "swirl"
@@ -38,7 +38,7 @@ type = "number"
 min = 2.0
 max = 24.0
 step = 0.5
-default = 9.0
+default = 14.0
 
 [[settings]]
 key = "vibrance"
@@ -65,4 +65,4 @@ type = "number"
 min = 0.0
 max = 1.0
 step = 0.01
-default = 0.55
+default = 0.3

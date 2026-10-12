@@ -7,7 +7,7 @@ name = "Watercolour"
 family = "Painterly"
 blurb = "Translucent washes, pooled pigment edges and a deckled paper border."
 technique = "Abstraction + wet-in-wet bleeding, Bousseau's pigment-density model for edge darkening, turbulence and granulation, XDoG pencil lines and a noise-carved vignette with splatter."
-version = "0.2.2"
+version = "0.3.0"
 author = "Photo·AIrt"
 licence = "MIT"
 run = ["bin/watercolor"]
@@ -65,7 +65,7 @@ type = "number"
 min = 0.0
 max = 1.0
 step = 0.01
-default = 0.35
+default = 0.25
 
 [[settings]]
 key = "border"
@@ -83,4 +83,4 @@ type = "number"
 min = 0.0
 max = 1.0
 step = 0.01
-default = 0.35
+default = 0.25

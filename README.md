@@ -15,6 +15,8 @@ and run `photo-airt` (`photo-airt.exe` on Windows). Linux and Windows downloads
 are for x64; macOS has separate Apple Silicon and Intel downloads. The
 prebuilt executable does not need Rust.
 
+![The same studio on Linux, Windows and macOS](docs/screenshots/platforms.jpg)
+
 To build from source:
 
 You need a Rust toolchain (pinned in `mise.toml`, or any recent stable Rust).
@@ -123,14 +125,14 @@ Downloaded and pasted photos are cached in `~/.cache/photo-airt/sources`.
 Cached copies that are no longer among your recents are cleaned up
 automatically.
 
-## Fourteen algorithmic styles
+## Fifteen algorithmic styles
 
 Every style is written from scratch in Rust and runs on all cores with rayon.
 The cards in the style gallery show live previews of *your* photo. Selecting
 one renders it at working resolution in a second or two. A paint-sweep
 animation reveals each new result.
 
-![The same photo in twelve of the fourteen styles](docs/screenshots/styles-grid.jpg)
+![The same photo in twelve of the fifteen styles](docs/screenshots/styles-grid.jpg)
 
 | Style | Technique |
 |---|---|
@@ -140,7 +142,8 @@ animation reveals each new result.
 | Starry Flow | Line integral convolution of colour-jittered stroke noise along a smoothed tangent field |
 | Pointillism | Jittered dot placement, divisionist hue splitting, a detail pass |
 | Graphite Sketch, Ink & Wash, Cel Animation | Colour dodge with LIC hatching, XDoG, soft value quantisation |
-| Stained Glass, Low Poly, Pop Art Quad | Jump-flood Voronoi with chamfer-distance lead lines, Delaunay facets, posterised palettes |
+| Scratchboard | Night tone mapping (blue skies and water to ink), flow-aligned scratch thresholding, XDoG contours, sun rays and stars, navy-to-cream ink ramp |
+| Stained Glass, Low Poly, Pop Art Quad | SLIC superpixel panes with chamfer-distance lead lines, Delaunay facets, posterised palettes |
 | CMYK Halftone, Risograph, Pixel Art | Rotated AM screens, least-squares two-ink separation, k-means++ palette with Bayer dithering |
 
 Each style's settings appear as controls in the **Atelier** panel. Every
@@ -155,13 +158,13 @@ language. A plug-in's `plugin.toml` describes it (name, gallery group,
 description and settings), and Photo·AIrt turns its settings into sliders,
 toggles and drop-downs in the Atelier panel. Plug-in styles get live
 previews, the finish layer, export and Art Director recipes, just like the
-built-in ones. The 14 built-in styles use the same plug-in interface, compiled
+built-in ones. The 15 built-in styles use the same plug-in interface, compiled
 into the single executable, so the app works out of the box with nothing to
 install. Each one lives in its own folder under [`plugins/`](plugins), laid
 out like an external plug-in. Build its executable into the folder, move the
 folder to a plug-ins location, and it loads as an external plug-in.
 
-![The Plug-ins panel: where plug-ins are looked for, and each plug-in's status](docs/screenshots/plugins.jpg)
+![The Plug-ins panel on Windows: where plug-ins are looked for, and each plug-in's status](docs/screenshots/plugins.jpg)
 
 - **Where plug-ins live:** a plug-in is a folder with a `plugin.toml`. The app
   looks in folders listed in `PHOTO_AIRT_PLUGINS`, then your plug-ins folder
@@ -322,3 +325,5 @@ security issue, follow [SECURITY.md](SECURITY.md).
 
 [MIT](LICENSE) © 2026 Javier Callico. The bundled Inter and Playfair Display
 fonts are licensed under the SIL Open Font License 1.1 (`assets/fonts/`).
+The photos in the screenshots are public domain (CC0) images from Wikimedia
+Commons; see [docs/screenshots/CREDITS.md](docs/screenshots/CREDITS.md).

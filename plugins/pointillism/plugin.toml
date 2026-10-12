@@ -6,8 +6,8 @@ id = "pointillism"
 name = "Pointillism"
 family = "Painterly"
 blurb = "Seurat-style dabs of pure colour that mix in the eye."
-technique = "Jittered blue-noise dot placement with divisionist colour splitting and a second fine pass where the photo has detail."
-version = "0.2.2"
+technique = "Jittered blue-noise dot placement with lightness-preserving divisionist colour splitting and a second fine pass where the photo has detail."
+version = "0.3.0"
 author = "Photo·AIrt"
 licence = "MIT"
 run = ["bin/pointillism"]
@@ -20,7 +20,7 @@ type = "number"
 min = 2.0
 max = 16.0
 step = 0.5
-default = 6.0
+default = 10.0
 
 [[settings]]
 key = "density"
@@ -47,7 +47,7 @@ type = "number"
 min = 0.0
 max = 0.6
 step = 0.01
-default = 0.25
+default = 0.3
 
 [[settings]]
 key = "saturation"

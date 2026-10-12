@@ -1,4 +1,4 @@
-//! The fourteen styles compiled into the executable (decision D3), exposed
+//! The fifteen styles compiled into the executable (decision D3), exposed
 //! through the same [`StylePlugin`] contract as external plug-ins.
 //!
 //! Each lives in its own folder under `plugins/`, laid out like an external
@@ -16,7 +16,7 @@ use super::{RenderError, StylePlugin};
 use crate::imaging::Img;
 
 /// The built-in styles, in gallery order.
-const STYLES: [Style; 14] = [
+const STYLES: [Style; 15] = [
     photo_airt_oil::STYLE,
     photo_airt_brush::STYLE,
     photo_airt_watercolor::STYLE,
@@ -25,6 +25,7 @@ const STYLES: [Style; 14] = [
     photo_airt_pencil::STYLE,
     photo_airt_ink::STYLE,
     photo_airt_toon::STYLE,
+    photo_airt_scratchboard::STYLE,
     photo_airt_stained_glass::STYLE,
     photo_airt_lowpoly::STYLE,
     photo_airt_popart::STYLE,

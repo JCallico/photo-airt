@@ -37,7 +37,7 @@ pub fn render(src: &Img, p: &Params, ctx: &Ctx) -> Option<Img> {
             let sx = (cu * ca - cv * sa) * cell;
             let sy = (cu * sa + cv * ca) * cell;
             let s = base.sample(sx, sy);
-            let kk = (1.0 - s[0].max(s[1]).max(s[2])) * 0.7;
+            let kk = (1.0 - s[0].max(s[1]).max(s[2])) * 0.5;
             let cov = if k == 3 {
                 kk
             } else {
