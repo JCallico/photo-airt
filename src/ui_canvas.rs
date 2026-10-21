@@ -45,6 +45,53 @@ fn radial(painter: &egui::Painter, center: Pos2, radii: Vec2, color: Color32) {
     painter.add(Shape::mesh(m));
 }
 
+/// A tapered brush stroke along a quadratic curve from `a` to `b`, bowed by
+/// `bow`, shaded like the icon's stroke from Codex through Duet to Claude.
+fn brush_stroke(painter: &egui::Painter, a: Pos2, b: Pos2, bow: Vec2, width: f32, alpha: f32) {
+    let ctrl = a + (b - a) / 2.0 + bow;
+    let n = 28;
+    let mut m = Mesh::default();
+    for i in 0..=n {
+        let u = i as f32 / n as f32;
+        let p = a.lerp(ctrl, u).lerp(ctrl.lerp(b, u), u);
+        let tangent = ((ctrl - a) * (1.0 - u) + (b - ctrl) * u).normalized();
+        let half = width * (std::f32::consts::PI * u.powf(0.8)).sin().max(0.0);
+        let col = if u < 0.5 { theme::lerp_color(CODEX, DUET, u * 2.0) } else { theme::lerp_color(DUET, CLAUDE, u * 2.0 - 1.0) }
+            .gamma_multiply(alpha);
+        m.colored_vertex(p + tangent.rot90() * half, col);
+        m.colored_vertex(p - tangent.rot90() * half, col);
+        if i > 0 {
+            let j = 2 * i;
+            m.add_triangle(j - 2, j - 1, j);
+            m.add_triangle(j - 1, j, j + 1);
+        }
+    }
+    painter.add(Shape::mesh(m));
+}
+
+/// The four-pointed AI sparkle from the icon, with concave sides.
+fn sparkle(painter: &egui::Painter, c: Pos2, r: f32, color: Color32) {
+    let tip = |i: usize| {
+        let a = -std::f32::consts::FRAC_PI_2 + i as f32 * std::f32::consts::FRAC_PI_4;
+        let rr = if i.is_multiple_of(2) { r } else { r * 0.3 };
+        c + vec2(a.cos(), a.sin()) * rr
+    };
+    let mut m = Mesh::default();
+    m.colored_vertex(c, color);
+    for i in 0..8 {
+        let (p0, p1) = (tip(i), tip(i + 1));
+        let ctrl = c + ((p0 - c) + (p1 - c)) * 0.3;
+        for s in 0..4 {
+            let u = s as f32 / 4.0;
+            m.colored_vertex(p0.lerp(ctrl, u).lerp(ctrl.lerp(p1, u), u), color);
+        }
+    }
+    for i in 0..32u32 {
+        m.add_triangle(0, 1 + i, 1 + (i + 1) % 32);
+    }
+    painter.add(Shape::mesh(m));
+}
+
 fn ring(painter: &egui::Painter, c: Pos2, r: f32, frac: f32, color: Color32, width: f32) {
     painter.circle_stroke(c, r, Stroke::new(width, color.gamma_multiply(0.18)));
     let n = 60;
@@ -321,8 +368,11 @@ impl App {
     }
 
     fn draw_empty(&mut self, ui: &mut Ui, painter: &egui::Painter, rect: Rect, t: f32) {
-        let blobs = [GOLD, CLAUDE, CODEX, DUET, Color32::from_rgb(90, 140, 230), Color32::from_rgb(230, 90, 120)];
-        for (k, col) in blobs.iter().enumerate() {
+        // The welcome screen echoes the icon: pigment glows, brush strokes in
+        // the icon's Codex-to-Claude gradient sweeping up and to the right, and
+        // AI sparkles twinkling into view.
+        let pigments = [GOLD, CODEX, DUET, CLAUDE];
+        for (k, col) in pigments.iter().chain(&pigments[..2]).enumerate() {
             let kf = k as f32 + 1.0;
             let c = rect.center()
                 + vec2(
@@ -330,18 +380,42 @@ impl App {
                     (t * 0.11 * (kf * 0.7).sqrt() + kf * 2.3).cos() * rect.height() * 0.28,
                 );
             let r = rect.width().min(rect.height()) * (0.22 + 0.04 * (t * 0.3 + kf).sin());
-            radial(painter, c, vec2(r, r), col.gamma_multiply(0.16));
+            radial(painter, c, vec2(r, r), col.gamma_multiply(0.14));
         }
-        // Drifting brush marks.
-        for k in 0..18 {
+        let along = vec2(0.86, -0.5);
+        let across = vec2(0.5, 0.86);
+        let diagonal = rect.size().length();
+        for k in 0..12 {
             let kf = k as f32;
-            let y = rect.top() + (kf * 53.0 + t * (8.0 + kf)) % rect.height();
-            let x = rect.left() + ((kf * 137.0) % rect.width());
-            let len = 30.0 + (kf * 17.0) % 60.0;
-            let col = blobs[k % blobs.len()].gamma_multiply(0.18);
-            painter.line_segment([pos2(x, y), pos2(x + len, y - len * 0.35)], Stroke::new(3.0 + (k % 3) as f32, col));
+            let len = rect.width().min(rect.height()) * (0.3 + 0.18 * (kf * 0.37).fract());
+            let span = diagonal + 2.0 * len;
+            let s = (t * (14.0 + 5.0 * (k % 3) as f32) + kf * 211.0) % span;
+            let lane = ((kf * 0.618 + 0.11) % 1.0) - 0.5;
+            let a = rect.center() + across * lane * diagonal * 0.75 + along * (s - span / 2.0);
+            let width = 8.0 + 8.0 * (kf * 0.53).fract();
+            brush_stroke(painter, a, a + along * len, across * len * 0.16, width, 0.3);
         }
+        for k in 0..16u32 {
+            let kf = k as f32;
+            let phase = t * (0.55 + 0.3 * (kf * 0.31).fract()) + kf * 1.7;
+            // Each twinkle appears somewhere new.
+            let seed = kf + 37.0 * (phase / std::f32::consts::TAU).floor();
+            let twinkle = phase.sin().max(0.0).powi(3);
+            let r = (6.0 + 10.0 * (seed * 0.43).fract()) * twinkle;
+            if r > 0.5 {
+                let p = rect.min + vec2((seed * 0.754_877).fract() * rect.width(), (seed * 0.569_84).fract() * rect.height());
+                let col = if k.is_multiple_of(3) { TEXT } else { GOLD };
+                radial(painter, p, vec2(r * 2.2, r * 2.2), GOLD.gamma_multiply(0.12 * twinkle));
+                sparkle(painter, p, r, col.gamma_multiply(0.75));
+            }
+        }
+        // The logo floats above the title, its sparkle glowing.
         let c = rect.center();
+        let logo = Rect::from_center_size(c + vec2(0.0, -178.0 + 4.0 * (t * 0.8).sin()), vec2(112.0, 112.0));
+        radial(painter, logo.center(), vec2(120.0, 120.0), GOLD.gamma_multiply(0.07));
+        crate::icon::paint_mark(ui, logo, Color32::WHITE);
+        let glow = logo.min + logo.size() * vec2(0.572, 0.324);
+        radial(painter, glow, vec2(26.0, 26.0), GOLD.gamma_multiply(0.18 + 0.14 * (t * 1.6).sin()));
         painter.text(c + vec2(0.0, -70.0), Align2::CENTER_CENTER, "Photo·AIrt", FontId::new(76.0, serif_italic()), TEXT);
         painter.text(
             c + vec2(0.0, -8.0),

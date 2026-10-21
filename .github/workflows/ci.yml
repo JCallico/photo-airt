@@ -125,6 +125,13 @@ jobs:
             "target/release/photo-airt$exe" --check-plugin "$moved"
           done
 
+      # The release wraps the macOS executable in an app bundle with its icon.
+      - name: macOS app bundle builds and verifies
+        if: runner.os == 'macOS'
+        run: |
+          packaging/macos/bundle.sh target/release/photo-airt 0.0.0 "$RUNNER_TEMP/bundle"
+          "$RUNNER_TEMP/bundle/Photo-AIrt.app/Contents/MacOS/photo-airt" --plugins
+
   dependencies:
     name: Dependency policy
     runs-on: ubuntu-latest

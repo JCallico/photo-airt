@@ -6,21 +6,42 @@ and test to pass, then creates a **draft** GitHub release with generated
 release notes and a `SHA256SUMS.txt` file. Publication is a separate manual
 step in GitHub, so you can review the downloads and notes first.
 
-| Archive suffix | Platform | Executable |
+| Archive suffix | Platform | Contents |
 |---|---|---|
-| `linux-x86_64.tar.gz` | Linux x64, glibc 2.35 or newer (Ubuntu 22.04 baseline) | `photo-airt` |
-| `macos-aarch64.tar.gz` | macOS, Apple Silicon | `photo-airt` |
-| `macos-x86_64.tar.gz` | macOS, Intel | `photo-airt` |
-| `windows-x86_64.zip` | Windows x64 | `photo-airt.exe` |
+| `linux-x86_64.tar.gz` | Linux x64, glibc 2.35 or newer (Ubuntu 22.04 baseline) | `photo-airt`, plus `share/` with the desktop entry and icon theme |
+| `macos-aarch64.tar.gz` | macOS, Apple Silicon | `Photo-AIrt.app` |
+| `macos-x86_64.tar.gz` | macOS, Intel | `Photo-AIrt.app` |
+| `windows-x86_64.zip` | Windows x64 | `photo-airt.exe`, with its icon embedded |
 
-Each archive includes the application and font licenses. Fonts are embedded
-in the executable; no Rust toolchain or files beside the executable are
-needed. Linux still needs its desktop graphics libraries and XDG desktop
-portal. These are executable archives, with no installer, macOS app bundle,
-code signing or notarization. The macOS builds currently use macOS 14
-(Apple Silicon) and macOS 15 (Intel); test older systems before claiming
-compatibility. AI features continue to use separately installed, logged-in
-Claude Code or Codex CLIs.
+Each archive includes the application and font licenses. Fonts and the icon
+are embedded in the executable; no Rust toolchain or files beside the
+executable are needed to run it. The Linux `share/` folder and the macOS app
+bundle only let the desktop show the app with its name and icon. Linux still
+needs its desktop graphics libraries and XDG desktop portal. The README's
+[Install](../README.md#install) section has the per-OS install steps.
+
+There is no installer, code signing with a developer identity or
+notarization. The macOS bundle is signed ad hoc by
+[`packaging/macos/bundle.sh`](../packaging/macos/bundle.sh), so Gatekeeper
+blocks a downloaded copy until its quarantine attribute is cleared, and
+Windows SmartScreen may warn about the unsigned executable. The macOS builds
+currently use macOS 14 (Apple Silicon) and macOS 15 (Intel); test older
+systems before claiming compatibility. AI features continue to use separately
+installed, logged-in Claude Code or Codex CLIs.
+
+## The app icon
+
+The icon's design lives in [`assets/icon/build.py`](../assets/icon/build.py),
+which writes the SVG sources in `assets/icon/` and every packaged raster: the
+Windows `photo-airt.ico` (embedded by `build.rs`), the macOS
+`photo-airt.icns` and the Linux icon theme under `packaging/linux/share/`. The
+app renders the in-app logo and window icon from the same SVGs at run time.
+After changing the design, run it (it needs Python 3 and `rsvg-convert`) and
+commit the regenerated files:
+
+```bash
+python3 assets/icon/build.py
+```
 
 ## Preparing a release
 
@@ -45,7 +66,9 @@ Claude Code or Codex CLIs.
    mismatches and commits outside `main`'s history. It builds and tests with
    `Cargo.lock` enforced on all four native runners.
 4. Open the draft under **Releases**, review the notes, download and try each
-   platform's executable, and verify the checksums. On Linux:
+   platform's executable, and verify the checksums. Check that the icon shows
+   in the window, taskbar or Dock, the app launcher and the file manager. On
+   Linux:
 
    ```bash
    sha256sum --check --ignore-missing SHA256SUMS.txt

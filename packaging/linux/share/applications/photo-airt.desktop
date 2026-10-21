@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Photo·AIrt
+GenericName=Photo Art Studio
+Comment=Turn your photographs into art with classic algorithms and AI
+Exec=photo-airt %f
+Icon=photo-airt
+Terminal=false
+Categories=Graphics;2DGraphics;RasterGraphics;
+Keywords=photo;art;painting;filter;style;AI;
+MimeType=image/jpeg;image/png;image/webp;image/tiff;image/bmp;image/gif;image/heif;image/heic;
+StartupWMClass=photo-airt

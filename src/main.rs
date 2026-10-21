@@ -2,6 +2,7 @@ mod ai;
 mod app;
 mod app_open;
 mod finish;
+mod icon;
 mod photo_io;
 mod plugins;
 mod sources;
@@ -29,12 +30,16 @@ fn main() -> anyhow::Result<()> {
         Some("--plugins") => return list_plugins(),
         _ => {}
     }
-    // A path or a link (https://…) to open on start.
-    let initial = args.get(1).filter(|a| !a.starts_with("--")).cloned();
+    #[cfg(target_os = "macos")]
+    adopt_login_shell_path();
+    // A path or a link (https://…) to open on start. Older macOS passes
+    // `-psn_…` to apps opened from Finder.
+    let initial = args.get(1).filter(|a| !a.starts_with("--") && !a.starts_with("-psn_")).cloned();
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("Photo·AIrt")
             .with_app_id("photo-airt")
+            .with_icon(icon::window_icon())
             .with_inner_size([1560.0, 960.0])
             .with_min_inner_size([1100.0, 680.0])
             .with_drag_and_drop(true),
@@ -42,6 +47,54 @@ fn main() -> anyhow::Result<()> {
     };
     eframe::run_native("Photo·AIrt", options, Box::new(move |cc| Ok(Box::new(app::App::new(cc, initial)))))
         .map_err(|e| anyhow::anyhow!("{e}"))
+}
+
+/// Apps opened from Finder or the Dock get launchd's minimal `PATH`, which
+/// misses where the `claude` and `codex` CLIs are usually installed. Inside
+/// the app bundle, adopt the `PATH` of the user's login shell, as a terminal
+/// would see it, before any thread starts.
+#[cfg(target_os = "macos")]
+fn adopt_login_shell_path() {
+    use std::process::{Command, Stdio};
+    let in_bundle = std::env::current_exe().is_ok_and(|exe| exe.to_string_lossy().contains(".app/Contents/MacOS/"));
+    if !in_bundle {
+        return;
+    }
+    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into());
+    let Ok(mut child) = Command::new(shell)
+        .args(["-ilc", r#"printf '\n%s%s%s' __PHOTO_AIRT_PATH__ "$PATH" __PHOTO_AIRT_PATH__"#])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+    else {
+        return;
+    };
+    // A slow or interactive shell profile must not hold up the app.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while matches!(child.try_wait(), Ok(None)) && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(25));
+    }
+    if matches!(child.try_wait(), Ok(None)) {
+        let _ = child.kill();
+        return;
+    }
+    let Ok(out) = child.wait_with_output() else { return };
+    if let Some(path) = marked_path(&String::from_utf8_lossy(&out.stdout)) {
+        let current = std::env::var("PATH").unwrap_or_default();
+        // SAFETY: called at the start of main, before any other thread exists.
+        unsafe { std::env::set_var("PATH", if current.is_empty() { path.to_string() } else { format!("{path}:{current}") }) };
+    }
+}
+
+/// The `PATH` printed between markers by the login shell, ignoring anything
+/// its profile prints around it.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn marked_path(output: &str) -> Option<&str> {
+    const MARK: &str = "__PHOTO_AIRT_PATH__";
+    let start = output.find(MARK)? + MARK.len();
+    let len = output[start..].find(MARK)?;
+    Some(&output[start..start + len]).filter(|p| !p.trim().is_empty())
 }
 
 /// Headless batch mode, handy for scripting and for comparing styles:
@@ -198,4 +251,17 @@ fn list_plugins() -> anyhow::Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::marked_path;
+
+    #[test]
+    fn login_shell_path_ignores_profile_noise() {
+        let out = "Welcome!\n\n__PHOTO_AIRT_PATH__/opt/homebrew/bin:/usr/bin__PHOTO_AIRT_PATH__";
+        assert_eq!(marked_path(out), Some("/opt/homebrew/bin:/usr/bin"));
+        assert_eq!(marked_path("no markers"), None);
+        assert_eq!(marked_path("__PHOTO_AIRT_PATH__ __PHOTO_AIRT_PATH__"), None);
+    }
 }

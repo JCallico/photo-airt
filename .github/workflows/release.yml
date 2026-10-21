@@ -122,12 +122,18 @@ jobs:
           cp LICENSE "dist/$package/"
           cp assets/fonts/OFL-*.txt "dist/$package/licenses/"
           if [[ "$RUNNER_OS" == Windows ]]; then
+            # The icon is embedded in the executable by build.rs.
             cp "target/$TARGET/release/photo-airt.exe" "dist/$package/"
             export PACKAGE="$package"
             python -c 'import os,shutil; p=os.environ["PACKAGE"]; shutil.make_archive("dist/"+p, "zip", "dist", p)'
+          elif [[ "$RUNNER_OS" == macOS ]]; then
+            packaging/macos/bundle.sh "target/$TARGET/release/photo-airt" "${TAG#v}" "dist/$package"
+            tar -czf "dist/$package.tar.gz" -C dist "$package"
           else
             cp "target/$TARGET/release/photo-airt" "dist/$package/"
             chmod 755 "dist/$package/photo-airt"
+            # The desktop entry and icon theme, to copy into ~/.local/share.
+            cp -R packaging/linux/share "dist/$package/"
             tar -czf "dist/$package.tar.gz" -C dist "$package"
           fi
           rm -rf "dist/$package"
