@@ -7,17 +7,87 @@ API keys: each AI feature appears only when its CLI is found on `PATH`.
 
 ![Photo·AIrt studio: style gallery, split before/after compare, atelier controls](docs/screenshots/studio-split.jpg)
 
-## Getting started
+## Install
 
-Download the executable archive for your OS from
-[GitHub Releases](https://github.com/JCallico/photo-airt/releases), extract it,
-and run `photo-airt` (`photo-airt.exe` on Windows). Linux and Windows downloads
-are for x64; macOS has separate Apple Silicon and Intel downloads. The
-prebuilt executable does not need Rust.
+Download the archive for your OS from
+[GitHub Releases](https://github.com/JCallico/photo-airt/releases). Linux and
+Windows downloads are for x64. macOS has separate downloads for Apple Silicon
+(`macos-aarch64`) and Intel (`macos-x86_64`). The app is a single
+self-contained executable and does not need Rust. To check a download, compare
+it with `SHA256SUMS.txt` from the same release (`sha256sum --check
+--ignore-missing SHA256SUMS.txt` on Linux, `shasum -a 256` on macOS,
+`Get-FileHash` on Windows).
+
+The AI features also need [Claude Code](https://claude.com/claude-code),
+[Codex CLI](https://github.com/openai/codex) or both, installed and logged in.
+Everything else works without them.
 
 ![The same studio on Linux, Windows and macOS](docs/screenshots/platforms.jpg)
 
-To build from source:
+### Linux
+
+The archive holds the executable plus a `share/` folder with the desktop
+entry and icons. Install them for your user, so Photo·AIrt appears in your app
+launcher with its icon:
+
+```bash
+tar -xzf photo-airt-vX.Y.Z-linux-x86_64.tar.gz
+cd photo-airt-vX.Y.Z-linux-x86_64
+install -Dm755 photo-airt ~/.local/bin/photo-airt
+cp -R share/. ~/.local/share/
+update-desktop-database ~/.local/share/applications 2>/dev/null || true
+gtk-update-icon-cache -f -t ~/.local/share/icons/hicolor 2>/dev/null || true
+```
+
+`~/.local/bin` must be on your `PATH` (it is on most distributions). Apps
+started from the launcher get your session's `PATH`, so install the AI CLIs
+somewhere on it, not only in a shell profile. To uninstall, delete
+`~/.local/bin/photo-airt`, `~/.local/share/applications/photo-airt.desktop`
+and `~/.local/share/icons/hicolor/*/apps/photo-airt.*`.
+
+The native file dialog uses the XDG desktop portal. HEIC files are decoded
+through ImageMagick, libvips or `heif-convert` when one of them is installed.
+
+### Windows
+
+Extract the zip, then move `photo-airt.exe` somewhere permanent and add it to
+the Start menu. In PowerShell, from the extracted folder:
+
+```powershell
+$dir = "$env:LOCALAPPDATA\Programs\Photo-AIrt"
+New-Item -ItemType Directory -Force $dir | Out-Null
+Copy-Item .\photo-airt.exe $dir
+Unblock-File "$dir\photo-airt.exe"
+$shortcut = (New-Object -ComObject WScript.Shell).CreateShortcut("$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Photo-AIrt.lnk")
+$shortcut.TargetPath = "$dir\photo-airt.exe"
+$shortcut.Save()
+```
+
+The executable is not code-signed. If you start it straight from a download,
+SmartScreen may warn about an unrecognised app; choose **More info → Run
+anyway**. (`Unblock-File` above clears that mark for the installed copy.) To
+uninstall, delete the folder and the Start menu shortcut.
+
+### macOS
+
+The archive holds `Photo-AIrt.app`. Drag it into **Applications**, or in
+Terminal, from the folder that contains the download:
+
+```bash
+tar -xzf photo-airt-vX.Y.Z-macos-aarch64.tar.gz   # macos-x86_64 on Intel Macs
+mv photo-airt-vX.Y.Z-macos-aarch64/Photo-AIrt.app /Applications/
+xattr -dr com.apple.quarantine /Applications/Photo-AIrt.app
+```
+
+The app is signed ad hoc but not notarised, so macOS blocks a downloaded copy
+the first time. The `xattr` command above clears the download mark. Without
+it, open the app once, then choose **System Settings → Privacy & Security →
+Open Anyway**. When started from Finder or the Dock, the app reads your login
+shell's `PATH` so it finds the AI CLIs as a terminal would. The command-line
+modes are at `/Applications/Photo-AIrt.app/Contents/MacOS/photo-airt`. To
+uninstall, move the app to the Bin.
+
+## Build from source
 
 You need a Rust toolchain (pinned in `mise.toml`, or any recent stable Rust).
 The AI features also need either or both of
@@ -30,14 +100,15 @@ cd photo-airt
 cargo run --release -- path/to/photo.jpg   # a path or a link; or start empty and press Ctrl+O
 ```
 
+Windows builds embed the app icon with a resource compiler: `rc.exe` from the
+Windows SDK (installed with the Visual Studio Build Tools) for MSVC, or
+`windres`/`llvm-windres` for GNU targets and cross-compiling (set
+`RC_<target>` to choose one).
+
 Local paths may be absolute or relative to the current directory. An existing
 local file takes precedence over a bare website address; prefix a relative
 path with `./` (or `.\` on Windows) to identify it as a file even if it is
 missing. Explicit `https://` links always open from the web.
-
-On Linux, the native file dialog uses the XDG desktop portal. HEIC files are
-decoded through ImageMagick, libvips or `heif-convert` when one of them is
-installed.
 
 ## Open photos from anywhere
 

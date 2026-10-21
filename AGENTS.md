@@ -70,6 +70,13 @@
   questions. Add ideas there rather than starting unplanned work.
 - `assets/fonts/` holds the bundled OFL fonts. `docs/screenshots/` holds the
   README images.
+- `assets/icon/build.py` is the app icon's design. It generates the SVGs in
+  `assets/icon/` (embedded and drawn by `src/icon.rs` as the window icon and
+  the in-app logo), the Windows `.ico` (embedded in the executable by
+  `build.rs`), the macOS `.icns` and the Linux icon theme. Edit the script,
+  never the generated files, and rerun it. `packaging/` holds what the
+  release archives add around the executable: the Linux desktop entry and
+  icons, and the macOS app bundle (`packaging/macos/bundle.sh`).
 - `.github/` holds the CI workflow, Dependabot configuration and
   `CODEOWNERS`. The CI uses only GitHub-owned actions pinned by commit SHA,
   with a read-only token. `deny.toml` is the `cargo-deny` policy for

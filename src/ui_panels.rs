@@ -163,12 +163,8 @@ impl App {
         let width = ui.available_width();
         let compact = width < 1400.0;
         ui.horizontal_centered(|ui| {
-            let (r, _) = ui.allocate_exact_size(vec2(26.0, 26.0), Sense::hover());
-            let p = ui.painter();
-            // Logo: three overlapping pigment dots.
-            p.circle_filled(r.center() + vec2(-5.0, 3.0), 7.0, GOLD.gamma_multiply(0.9));
-            p.circle_filled(r.center() + vec2(5.0, 3.0), 7.0, CODEX.gamma_multiply(0.8));
-            p.circle_filled(r.center() + vec2(0.0, -5.0), 7.0, CLAUDE.gamma_multiply(0.8));
+            let (r, _) = ui.allocate_exact_size(vec2(28.0, 28.0), Sense::hover());
+            crate::icon::paint_mark(ui, r, Color32::WHITE);
             ui.label(theme::title_italic("Photo·AIrt", 24.0));
             if width >= 1200.0 {
                 ui.label(RichText::new("studio").size(11.0).color(FAINT));

@@ -1,0 +1,2 @@
+// The Windows executable's icon (Explorer, Start menu, shortcuts); see build.rs.
+1 ICON "photo-airt.ico"
