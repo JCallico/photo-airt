@@ -39,6 +39,25 @@ fn shimmer(ui: &Ui, rect: Rect, rounding: CornerRadius, accent: Color32) {
     }
 }
 
+/// A card title with its role badge: beside the title when there is room,
+/// under it in a narrow panel.
+fn card_header(ui: &mut Ui, title: &str, color: Color32, badge: &str) {
+    let title = theme::title(title, 19.0);
+    let title_w = ui.fonts_mut(|f| f.layout_no_wrap(title.text().to_string(), FontId::new(19.0, theme::serif()), TEXT).size().x);
+    let badge_w = ui.fonts_mut(|f| f.layout_no_wrap(badge.to_string(), FontId::proportional(11.5), TEXT).size().x) + 26.0;
+    if title_w + badge_w + 12.0 <= ui.available_width() {
+        ui.horizontal(|ui| {
+            ui.label(title);
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                theme::pill(ui, color, badge);
+            });
+        });
+    } else {
+        ui.label(title);
+        theme::pill(ui, color, badge);
+    }
+}
+
 fn fmt_elapsed(secs: u64) -> String {
     format!("{}:{:02}", secs / 60, secs % 60)
 }
@@ -136,16 +155,23 @@ impl App {
         // The side panels only make sense for a photo; without one the stage
         // has the whole width for the welcome screen.
         if self.photo.is_some() {
-            egui::Panel::left("left")
-                .default_size(340.0)
-                .size_range(290.0..=480.0)
-                .frame(egui::Frame::new().fill(PANEL).inner_margin(Margin::same(14)))
-                .show(ui, |ui| self.left_panel(ui));
-            egui::Panel::right("right")
-                .default_size(300.0)
-                .size_range(260.0..=420.0)
-                .frame(egui::Frame::new().fill(PANEL).inner_margin(Margin::same(14)))
-                .show(ui, |ui| self.right_panel(ui));
+            // Tiling window managers can make the window narrower than its
+            // minimum size; there the side panels shrink to a share of it so
+            // the photo keeps about half the window.
+            let width = ui.available_width();
+            let narrow = (width < 1100.0).then(|| (width * 0.25).max(200.0));
+            let left = egui::Panel::left("left").frame(egui::Frame::new().fill(PANEL).inner_margin(Margin::same(14)));
+            let left = match narrow {
+                Some(side) => left.resizable(false).exact_size(side),
+                None => left.default_size(340.0).size_range(290.0..=480.0),
+            };
+            left.show(ui, |ui| self.left_panel(ui));
+            let right = egui::Panel::right("right").frame(egui::Frame::new().fill(PANEL).inner_margin(Margin::same(14)));
+            let right = match narrow {
+                Some(side) => right.resizable(false).exact_size(side),
+                None => right.default_size(300.0).size_range(260.0..=420.0),
+            };
+            right.show(ui, |ui| self.right_panel(ui));
         }
         egui::CentralPanel::no_frame().show(ui, |ui| self.draw_canvas(ui));
         self.open_sheet_ui(&ctx);
@@ -442,12 +468,7 @@ impl App {
         // ---- Art director
         theme::card_frame(Some(d_color)).show(ui, |ui| {
             ui.set_width(ui.available_width());
-            ui.horizontal(|ui| {
-                ui.label(theme::title("Art Director", 19.0));
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    theme::pill(ui, d_color, &director.as_ref().map(|d| d.describe()).unwrap_or("unassigned".into()));
-                });
-            });
+            card_header(ui, "Art Director", d_color, &director.as_ref().map(|d| d.describe()).unwrap_or("unassigned".into()));
             ui.label(RichText::new(format!("{d_name} studies your photo, names it, reads its palette and writes three tuned recipes for the algorithms, plus a brief for the Master Painter.")).size(12.0).color(MUTED));
             ui.add_space(4.0);
             let busy = self.ai_busy("Art direction");
@@ -519,12 +540,7 @@ impl App {
         // ---- Master Painter
         theme::card_frame(Some(p_color)).show(ui, |ui| {
             ui.set_width(ui.available_width());
-            ui.horizontal(|ui| {
-                ui.label(theme::title("Master Painter", 19.0));
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    theme::pill(ui, p_color, &painter.as_ref().map(|p| p.describe()).unwrap_or("unassigned".into()));
-                });
-            });
+            card_header(ui, "Master Painter", p_color, &painter.as_ref().map(|p| p.describe()).unwrap_or("unassigned".into()));
             let blurb = match painter.as_ref().map(|p| p.cli) {
                 Some(ai::Cli::Codex) => "Codex repaints the whole photo with its image-generation model, keeping your composition.",
                 Some(ai::Cli::Claude) => "Claude repaints the photo as an SVG painting, layering hundreds of vector brush strokes. Claude Code has no raster image model.",
@@ -624,7 +640,7 @@ impl App {
                 ui.add_space(4.0);
                 ui.label(RichText::new(role.label()).strong().size(13.0));
                 let current = self.role(role).cloned();
-                ui.horizontal(|ui| {
+                ui.horizontal_wrapped(|ui| {
                     ui.spacing_mut().item_spacing.x = 6.0;
                     for cli in ai::Cli::ALL {
                         let eligible = role.eligible(cli, self.cli_status(cli));
@@ -646,6 +662,10 @@ impl App {
                         }
                     }
                     if let Some(cfg) = current.clone() {
+                        // In a narrow panel the model menu gets a line of its own.
+                        if ui.available_size_before_wrap().x < 120.0 {
+                            ui.end_row();
+                        }
                         self.model_picker(ui, role, cfg);
                     }
                 });
@@ -801,7 +821,8 @@ impl App {
                 ("A", "algorithms ⇄ AI studio"),
                 ("Scroll / drag", "zoom · pan · move the split"),
             ] {
-                ui.horizontal(|ui| {
+                // Wraps in a narrow panel instead of widening it.
+                ui.horizontal_wrapped(|ui| {
                     ui.label(RichText::new(k).size(11.0).color(GOLD).monospace());
                     ui.label(RichText::new(d).size(11.0).color(FAINT));
                 });
@@ -868,7 +889,7 @@ impl App {
             self.params_changed();
         }
         ui.add_space(6.0);
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             if ui.button("🎲  Reroll").on_hover_text("New random seed (R)").clicked() && self.photo.is_some() {
                 self.reroll();
             }
