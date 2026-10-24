@@ -1,6 +1,6 @@
 [package]
 name = "photo-airt"
-version = "0.5.1"
+version = "0.5.2"
 edition = "2024"
 description = "Photo·AIrt — turn your photographs into art with classic algorithms and AI (Claude & Codex CLIs)"
 license = "MIT"
@@ -26,19 +26,19 @@ url = "2"
 arboard = { version = "3.6", features = ["wayland-data-control"] }
 toml = "1"
 sha2 = "0.11"
-photo-airt-sdk = { path = "sdk", version = "0.5.1" }
+photo-airt-sdk = { path = "sdk", version = "0.5.2" }
 # The built-in styles (decision D3), in gallery order. Each is also a
 # standalone plug-in executable; see plugins/ and docs/plugins.md.
-photo-airt-oil = { path = "plugins/oil", version = "0.5.1" }
-photo-airt-brush = { path = "plugins/brush", version = "0.5.1" }
-photo-airt-watercolor = { path = "plugins/watercolor", version = "0.5.1" }
-photo-airt-pencil = { path = "plugins/pencil", version = "0.5.1" }
-photo-airt-ink-toon = { path = "plugins/ink_toon", version = "0.5.1" }
-photo-airt-stained-glass = { path = "plugins/stained_glass", version = "0.5.1" }
-photo-airt-lowpoly = { path = "plugins/lowpoly", version = "0.5.1" }
-photo-airt-halftone = { path = "plugins/halftone", version = "0.5.1" }
-photo-airt-pixel = { path = "plugins/pixel", version = "0.5.1" }
-photo-airt-scratchboard = { path = "plugins/scratchboard", version = "0.5.1" }
+photo-airt-oil = { path = "plugins/oil", version = "0.5.2" }
+photo-airt-brush = { path = "plugins/brush", version = "0.5.2" }
+photo-airt-watercolor = { path = "plugins/watercolor", version = "0.5.2" }
+photo-airt-pencil = { path = "plugins/pencil", version = "0.5.2" }
+photo-airt-ink-toon = { path = "plugins/ink_toon", version = "0.5.2" }
+photo-airt-stained-glass = { path = "plugins/stained_glass", version = "0.5.2" }
+photo-airt-lowpoly = { path = "plugins/lowpoly", version = "0.5.2" }
+photo-airt-halftone = { path = "plugins/halftone", version = "0.5.2" }
+photo-airt-pixel = { path = "plugins/pixel", version = "0.5.2" }
+photo-airt-scratchboard = { path = "plugins/scratchboard", version = "0.5.2" }
 
 [build-dependencies]
 # Embeds the icon in the Windows executable; does nothing for other targets.
