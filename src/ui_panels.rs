@@ -159,27 +159,48 @@ impl App {
 
     fn top_bar(&mut self, ui: &mut Ui) {
         // Narrow windows shorten or drop the least important items rather
-        // than letting the two sides of the bar overlap.
+        // than letting the two sides of the bar overlap. Tiling window
+        // managers can make the window narrower than its minimum size, so
+        // the bar keeps shrinking below it too.
         let width = ui.available_width();
         let compact = width < 1400.0;
+        let narrow = width < 1100.0;
+        let tiny = width < 780.0;
+        let tight = width < 640.0;
+        // A size for the full, narrow and tight bar.
+        let step = |full: f32, narrow_size: f32, tight_size: f32| {
+            if tight {
+                tight_size
+            } else if narrow {
+                narrow_size
+            } else {
+                full
+            }
+        };
         ui.horizontal_centered(|ui| {
             let (r, _) = ui.allocate_exact_size(vec2(28.0, 28.0), Sense::hover());
             crate::icon::paint_mark(ui, r, Color32::WHITE);
-            ui.label(theme::title_italic("Photo·AIrt", 24.0));
+            if !tiny {
+                ui.label(theme::title_italic("Photo·AIrt", 24.0));
+            }
             if width >= 1200.0 {
                 ui.label(RichText::new("studio").size(11.0).color(FAINT));
             }
-            ui.add_space(14.0);
-            if ui.button("📂  Open").on_hover_text("Open from files, a link or the clipboard (Ctrl+O)").clicked() {
+            ui.add_space(step(14.0, 8.0, 4.0));
+            let open = if narrow { "📂" } else { "📂  Open" };
+            if ui.button(open).on_hover_text("Open from files, a link or the clipboard (Ctrl+O)").clicked() {
                 self.show_open_sheet();
             }
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                // Never draw over the left side: past the last step, the
+                // right side is cut off instead.
+                ui.set_clip_rect(ui.max_rect().intersect(ui.clip_rect()));
                 let can_export = self.selected_artwork().is_some();
                 let label = if self.exporting { "Exporting…" } else { "Export" };
                 let mut child = ui.new_child(
                     egui::UiBuilder::new().max_rect(ui.available_rect_before_wrap()).layout(Layout::right_to_left(Align::Center)),
                 );
-                child.set_width(130.0);
+                child.set_width(step(130.0, 96.0, 72.0));
                 if theme::accent_button(&mut child, label, GOLD, can_export && !self.exporting)
                     .on_hover_text("Save the selected artwork at full resolution to ~/Pictures/Photo-AIrt (Ctrl+S)")
                     .clicked()
@@ -197,31 +218,42 @@ impl App {
                     self.plugins_open = true;
                     self.rescan_plugins();
                 }
-                ui.add_space(10.0);
-                // Compact pills keep only the name; the tooltip has the details.
+                ui.add_space(step(10.0, 6.0, 0.0));
+                // Compact pills keep only the name, narrow ones only the dot;
+                // the tooltip has the details.
                 let status = |s: &Option<ai::CliStatus>, name: &str| {
                     let (color, detail) = match s {
                         None => (FAINT, "…".to_string()),
                         Some(c) if c.found => (Color32::from_rgb(110, 210, 120), c.version.clone()),
                         Some(_) => (DANGER, "not found".to_string()),
                     };
-                    let text = if compact { name.to_string() } else { format!("{name} {detail}") };
+                    let text = if narrow {
+                        String::new()
+                    } else if compact {
+                        name.to_string()
+                    } else {
+                        format!("{name} {detail}")
+                    };
                     (color, text, format!("{name} {detail}"))
                 };
-                let (dc, tc, detail) = status(&self.codex, "Codex");
-                theme::pill(ui, dc, &tc)
-                    .on_hover_text(format!("{detail}\nCodex CLI — generative repainting via its image generation tool"));
-                let (dc, tc, detail) = status(&self.claude, "Claude");
-                theme::pill(ui, dc, &tc).on_hover_text(format!("{detail}\nClaude Code CLI — art direction, vector art, wall labels"));
-                ui.add_space(14.0);
+                // The narrowest bar drops the CLI status; the AI Studio roles card still greys out a missing CLI.
+                if !tight {
+                    let (dc, tc, detail) = status(&self.codex, "Codex");
+                    theme::pill(ui, dc, &tc)
+                        .on_hover_text(format!("{detail}\nCodex CLI — generative repainting via its image generation tool"));
+                    let (dc, tc, detail) = status(&self.claude, "Claude");
+                    theme::pill(ui, dc, &tc).on_hover_text(format!("{detail}\nClaude Code CLI — art direction, vector art, wall labels"));
+                }
+                ui.add_space(step(14.0, 8.0, 0.0));
                 // View switcher (right-to-left, so reversed).
-                for (v, name, key) in [
-                    (View::Gallery, "Gallery", "4"),
-                    (View::Single, "Single", "3"),
-                    (View::SideBySide, "Side by side", "2"),
-                    (View::Split, "Split", "1"),
+                for (v, name, short, key) in [
+                    (View::Gallery, "Gallery", "Gallery", "4"),
+                    (View::Single, "Single", "Single", "3"),
+                    (View::SideBySide, "Side by side", "Side", "2"),
+                    (View::Split, "Split", "Split", "1"),
                 ] {
-                    if theme::chip(ui, name, self.view == v, GOLD).on_hover_text(format!("Key {key}")).clicked() {
+                    let label = if narrow { short } else { name };
+                    if theme::chip(ui, label, self.view == v, GOLD).on_hover_text(format!("{name} · key {key}")).clicked() {
                         self.view = v;
                     }
                 }
