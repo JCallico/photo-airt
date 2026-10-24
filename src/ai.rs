@@ -73,7 +73,7 @@ pub struct CliStatus {
 }
 
 fn run_quiet(bin: &str, args: &[&str]) -> Option<String> {
-    let out = Command::new(bin).args(args).stdin(Stdio::null()).output().ok()?;
+    let out = crate::no_console_window(Command::new(bin).args(args).stdin(Stdio::null())).output().ok()?;
     out.status.success().then(|| String::from_utf8_lossy(&out.stdout).to_string())
 }
 
@@ -776,6 +776,7 @@ fn help_lists_flag(help: &str, flag: &str) -> bool {
 /// `claude -p` with streamed JSON events; returns the final result text.
 fn run_claude(prompt: &str, dir: &Path, model: &str, sh: &Arc<Mutex<JobShared>>, ctx: &egui::Context) -> Result<String> {
     let mut cmd = Command::new("claude");
+    crate::no_console_window(&mut cmd);
     cmd.args(["-p", "--output-format", "stream-json", "--verbose"]);
     if claude_supports(NO_SESSION_PERSISTENCE) {
         cmd.arg(NO_SESSION_PERSISTENCE);
@@ -868,6 +869,7 @@ fn run_codex(
     ctx: &egui::Context,
 ) -> Result<(Option<String>, String)> {
     let mut cmd = Command::new("codex");
+    crate::no_console_window(&mut cmd);
     cmd.args(["exec", "--skip-git-repo-check", "--json"]);
     if image_gen {
         cmd.args(["-s", "workspace-write", "--enable", "image_generation"]);
