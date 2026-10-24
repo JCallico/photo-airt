@@ -32,6 +32,8 @@ fn main() -> anyhow::Result<()> {
     }
     #[cfg(target_os = "macos")]
     adopt_login_shell_path();
+    #[cfg(windows)]
+    close_own_console();
     // A path or a link (https://…) to open on start. Older macOS passes
     // `-psn_…` to apps opened from Finder.
     let initial = args.get(1).filter(|a| !a.starts_with("--") && !a.starts_with("-psn_")).cloned();
@@ -85,6 +87,39 @@ fn adopt_login_shell_path() {
         // SAFETY: called at the start of main, before any other thread exists.
         unsafe { std::env::set_var("PATH", if current.is_empty() { path.to_string() } else { format!("{path}:{current}") }) };
     }
+}
+
+/// The executable is a console program so the command-line modes print to
+/// the terminal they run in. Started from the Start menu or Explorer, though,
+/// Windows gives it a console window of its own; close that one for the GUI,
+/// and leave a console shared with a terminal alone.
+#[cfg(windows)]
+fn close_own_console() {
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn GetConsoleProcessList(list: *mut u32, count: u32) -> u32;
+        fn FreeConsole() -> i32;
+    }
+    let mut ids = [0u32; 2];
+    // SAFETY: the buffer holds `ids.len()` entries, as the count says.
+    let attached = unsafe { GetConsoleProcessList(ids.as_mut_ptr(), ids.len() as u32) };
+    if attached == 1 {
+        // SAFETY: detaches this process from its console; no handles are held.
+        unsafe { FreeConsole() };
+    }
+}
+
+/// Keeps a command-line tool from opening a console window of its own on
+/// Windows, where the GUI has none (see `close_own_console`). Every tool the
+/// app runs has its output piped, so nothing else changes.
+pub(crate) fn no_console_window(cmd: &mut std::process::Command) -> &mut std::process::Command {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    cmd
 }
 
 /// The `PATH` printed between markers by the login shell, ignoring anything

@@ -231,6 +231,7 @@ fn command_for(dir: &Path, command: &[String], args: &[&str]) -> Command {
     let in_folder = dir.join(&program);
     let program = if !program.is_absolute() && in_folder.is_file() { in_folder } else { program };
     let mut cmd = Command::new(program);
+    crate::no_console_window(&mut cmd);
     cmd.args(&command[1..]).args(args).current_dir(dir).env_clear();
     for key in ENV_ALLOW {
         if let Some(v) = std::env::var_os(key) {

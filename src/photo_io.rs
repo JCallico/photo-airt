@@ -55,7 +55,7 @@ fn decode_via_cli(path: &Path) -> Result<image::RgbImage> {
     ];
     let mut last = anyhow!("no converter available");
     for (bin, args) in attempts {
-        match Command::new(bin).args(&args).output() {
+        match crate::no_console_window(Command::new(bin).args(&args)).output() {
             Ok(out) if out.status.success() && tmp.exists() => {
                 let img = image::open(&tmp).context("reading converted image")?.to_rgb8();
                 let _ = std::fs::remove_file(&tmp);
