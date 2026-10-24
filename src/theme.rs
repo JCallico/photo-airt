@@ -165,13 +165,16 @@ pub fn chip_enabled(ui: &mut egui::Ui, text: &str, selected: bool, accent: Color
     resp.on_hover_cursor(if enabled { egui::CursorIcon::PointingHand } else { egui::CursorIcon::NotAllowed })
 }
 
+/// A status pill: a coloured dot and a label. Without a label it is a round
+/// dot badge, for narrow windows.
 pub fn pill(ui: &mut egui::Ui, dot: Color32, text: &str) -> egui::Response {
     let font = FontId::proportional(11.5);
     let galley = ui.painter().layout_no_wrap(text.to_string(), font.clone(), TEXT);
-    let size = Vec2::new(galley.size().x + 26.0, 22.0);
+    let size = if text.is_empty() { Vec2::splat(22.0) } else { Vec2::new(galley.size().x + 26.0, 22.0) };
     let (rect, resp) = ui.allocate_exact_size(size, egui::Sense::hover());
     ui.painter().rect(rect, CornerRadius::same(11), CARD, Stroke::new(1.0, LINE), egui::StrokeKind::Inside);
-    ui.painter().circle_filled(egui::pos2(rect.left() + 11.0, rect.center().y), 3.5, dot);
+    let dot_x = if text.is_empty() { rect.center().x } else { rect.left() + 11.0 };
+    ui.painter().circle_filled(egui::pos2(dot_x, rect.center().y), 3.5, dot);
     ui.painter().text(egui::pos2(rect.left() + 19.0, rect.center().y), egui::Align2::LEFT_CENTER, text, font, TEXT);
     resp
 }
