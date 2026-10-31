@@ -523,6 +523,40 @@ impl App {
         });
     }
 
+    /// Save a time-lapse GIF of the selected algorithmic artwork being
+    /// painted (BL-004), re-rendered with its style, settings and seed.
+    pub fn export_timelapse(&mut self) {
+        let (Some(photo), Some(a)) = (&self.photo, self.selected_artwork()) else {
+            self.toast("Select an artwork to export", crate::theme::MUTED);
+            return;
+        };
+        let Some((style, params, seed)) = a.recipe.clone().filter(|_| a.kind == Kind::Algorithm) else {
+            self.toast("Time-lapses are made from algorithm styles", crate::theme::MUTED);
+            return;
+        };
+        if self.exporting {
+            return;
+        }
+        let (tx, ctx) = (self.tx.clone(), self.ctx.clone());
+        let base = std::path::Path::new(&photo.name).file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
+        let stem = format!("{base}-{}", a.title);
+        let finish = a.finish;
+        let path = photo.path.clone();
+        let plugin = plugins::registry().get(&style).cloned();
+        self.exporting = true;
+        self.toast("Painting the time-lapse…", crate::theme::GOLD);
+        std::thread::spawn(move || {
+            let job = || -> anyhow::Result<PathBuf> {
+                let plugin = plugin.ok_or_else(|| anyhow::anyhow!("style {style} is no longer available"))?;
+                let img = Img::from_rgb8(&photo_io::load_photo(&path)?).fit_long(crate::timelapse::LONG_SIDE);
+                crate::timelapse::export(plugin.as_ref(), &img, &params, seed, &finish, &photo_io::output_dir(), &stem)
+            };
+            let r = job().map_err(|e| format!("{e:#}"));
+            let _ = tx.send(WorkerMsg::Exported(r));
+            ctx.request_repaint();
+        });
+    }
+
     pub fn open_output_folder(&self) {
         let dir = photo_io::output_dir();
         let _ = std::fs::create_dir_all(&dir);

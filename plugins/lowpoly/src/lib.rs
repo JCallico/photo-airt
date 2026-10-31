@@ -85,7 +85,12 @@ pub fn render(src: &Img, p: &Params, ctx: &Ctx) -> Option<Img> {
 
     let mut out = Img::new(w, h, [0.0, 0.0, 0.0]);
     let ow = ctx.px(0.9);
-    for (v, c) in &faces {
+    let snapshot_every = if ctx.recording() { faces.len().div_ceil(12).max(1) } else { usize::MAX };
+    for (n, (v, c)) in faces.iter().enumerate() {
+        if n > 0 && n % snapshot_every == 0 {
+            // Faces not painted yet show as paper.
+            ctx.snapshot(&out.map(|c| if c == [0.0; 3] { [0.93, 0.9, 0.84] } else { c }));
+        }
         let minx = v.iter().map(|p| p[0]).fold(f32::INFINITY, f32::min).floor().max(0.0) as usize;
         let maxx = (v.iter().map(|p| p[0]).fold(0.0, f32::max).ceil() as usize).min(w - 1);
         let miny = v.iter().map(|p| p[1]).fold(f32::INFINITY, f32::min).floor().max(0.0) as usize;

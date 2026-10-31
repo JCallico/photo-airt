@@ -207,13 +207,18 @@ impl Params {
     }
 }
 
-/// Render context: resolution scaling, seed, progress and cancellation.
+/// Receives the intermediate images a style hands to [`Ctx::snapshot`].
+pub type SnapshotSink = Arc<dyn Fn(&Img) + Send + Sync>;
+
+/// Render context: resolution scaling, seed, progress, cancellation and,
+/// while a time-lapse is recorded, snapshots.
 #[derive(Clone)]
 pub struct Ctx {
     pub scale: f32,
     pub seed: u64,
     pub progress: Arc<AtomicU32>,
     pub cancel: Arc<AtomicBool>,
+    snapshots: Option<SnapshotSink>,
 }
 
 impl Ctx {
@@ -223,6 +228,25 @@ impl Ctx {
             seed,
             progress: Arc::new(AtomicU32::new(0)),
             cancel: Arc::new(AtomicBool::new(false)),
+            snapshots: None,
+        }
+    }
+    /// Record a time-lapse: every [`Ctx::snapshot`] goes to `sink`.
+    pub fn with_snapshots(mut self, sink: SnapshotSink) -> Self {
+        self.snapshots = Some(sink);
+        self
+    }
+    /// Whether a time-lapse is being recorded. Styles check this before
+    /// doing extra work only a time-lapse needs.
+    pub fn recording(&self) -> bool {
+        self.snapshots.is_some()
+    }
+    /// Hand an intermediate stage of the painting to the time-lapse, at the
+    /// natural end of a pass. Does nothing for ordinary renders. Taking
+    /// snapshots must never change the final image.
+    pub fn snapshot(&self, img: &Img) {
+        if let Some(sink) = &self.snapshots {
+            sink(img);
         }
     }
     /// Scale a reference-resolution pixel size to this render.
@@ -397,6 +421,11 @@ pub struct RenderRequest {
     pub seed: u64,
     /// This image's long side relative to the reference size (1600 px).
     pub scale: f32,
+    /// Present while a time-lapse is recorded: a folder for intermediate
+    /// PNGs, each announced with a `{"snapshot": "<file name>"}` line.
+    /// Optional; plug-ins may ignore it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub snapshots: Option<PathBuf>,
 }
 
 #[cfg(test)]

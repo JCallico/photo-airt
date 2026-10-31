@@ -86,11 +86,12 @@ impl App {
         if ctx.input(|i| !i.modifiers.command && i.key_pressed(Key::A)) {
             self.left_tab = if self.left_tab == LeftTab::Algorithms { LeftTab::AiStudio } else { LeftTab::Algorithms };
         }
-        let (open, save, v1, v2, v3, v4, left, right, pin, reroll) = ctx.input(|i| {
-            let c = i.modifiers.command;
+        let (open, save, timelapse, v1, v2, v3, v4, left, right, pin, reroll) = ctx.input(|i| {
+            let (c, shift) = (i.modifiers.command, i.modifiers.shift);
             (
                 c && i.key_pressed(Key::O),
-                c && i.key_pressed(Key::S),
+                c && !shift && i.key_pressed(Key::S),
+                c && shift && i.key_pressed(Key::S),
                 i.key_pressed(Key::Num1),
                 i.key_pressed(Key::Num2),
                 i.key_pressed(Key::Num3),
@@ -113,6 +114,9 @@ impl App {
         }
         if save {
             self.export_selected();
+        }
+        if timelapse {
+            self.export_timelapse();
         }
         for (k, v) in [(v1, View::Split), (v2, View::SideBySide), (v3, View::Single), (v4, View::Gallery)] {
             if k {
@@ -234,6 +238,15 @@ impl App {
                     self.export_selected();
                 }
                 ui.add_space(child.min_rect().width() + 6.0);
+                let can_timelapse = self.selected_artwork().is_some_and(|a| a.kind == Kind::Algorithm && a.recipe.is_some());
+                if ui
+                    .add_enabled(can_timelapse && !self.exporting, egui::Button::new("🎞"))
+                    .on_hover_text("Export a time-lapse GIF of this artwork being painted (Ctrl+Shift+S)")
+                    .on_disabled_hover_text("Time-lapses are made from algorithm styles: select one of their artworks")
+                    .clicked()
+                {
+                    self.export_timelapse();
+                }
                 if ui.button("🗁").on_hover_text("Open the output folder").clicked() {
                     self.open_output_folder();
                 }
@@ -817,6 +830,7 @@ impl App {
                 ("← →", "browse the collection"),
                 ("[ ]  ·  P", "previous · next photo · all photos"),
                 ("Ctrl+O · Ctrl+V", "open anywhere · paste a link"),
+                ("Ctrl+S · Ctrl+⇧S", "export · export a time-lapse"),
                 ("K / R", "keep draft · reroll seed"),
                 ("A", "algorithms ⇄ AI studio"),
                 ("Scroll / drag", "zoom · pan · move the split"),

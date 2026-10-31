@@ -1,10 +1,10 @@
 //! The plug-in side of the external contract, `render <request.json>`, for
 //! styles written in Rust.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 
 use crate::contract::{Ctx, Description, PROTOCOL, Params, RenderRequest, Style};
@@ -54,7 +54,10 @@ fn render_request(path: &Path, desc: &Description, render: impl FnOnce(&Img, &Pa
     }
     let img = read_png(&req.input)?;
     let params = Params::sanitized(desc, &req.params);
-    let ctx = Ctx::for_image(&img, req.seed);
+    let mut ctx = Ctx::for_image(&img, req.seed);
+    if let Some(dir) = req.snapshots.clone() {
+        ctx = ctx.with_snapshots(snapshot_writer(dir));
+    }
 
     // Report progress from a helper thread while rendering on this one.
     let done = Arc::new(AtomicBool::new(false));
@@ -74,6 +77,18 @@ fn render_request(path: &Path, desc: &Description, render: impl FnOnce(&Img, &Pa
     write_png(&out.to_rgb8(), &req.output).map_err(|e| format!("cannot write {}: {e}", req.output.display()))?;
     println!("{}", serde_json::json!({ "progress": 1.0 }));
     Ok(())
+}
+
+/// Writes each time-lapse snapshot to the request's folder and announces it.
+fn snapshot_writer(dir: PathBuf) -> crate::contract::SnapshotSink {
+    let count = Arc::new(AtomicUsize::new(0));
+    Arc::new(move |img: &Img| {
+        let n = count.fetch_add(1, Ordering::Relaxed);
+        let name = format!("snapshot-{n:04}.png");
+        if write_png(&img.to_rgb8(), &dir.join(&name)).is_ok() {
+            println!("{}", serde_json::json!({ "snapshot": name }));
+        }
+    })
 }
 
 /// Read an 8-bit RGB image, with decoder limits.

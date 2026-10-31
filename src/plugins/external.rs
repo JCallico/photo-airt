@@ -41,6 +41,18 @@ const SEED_MASK: u64 = (1 << 53) - 1;
 struct Line {
     progress: Option<f32>,
     error: Option<String>,
+    /// A time-lapse frame written to the request's `snapshots` folder.
+    snapshot: Option<String>,
+}
+
+/// Most time-lapse frames one render may hand back.
+const MAX_SNAPSHOTS: usize = 400;
+
+/// A snapshot name a plug-in announced, if it is a plain PNG file name: no
+/// folders, so it can only refer to a file inside the snapshots folder.
+fn snapshot_file_name(name: &str) -> Option<&str> {
+    let plain = !name.is_empty() && !name.contains(['/', '\\', ':']) && name != "." && name != "..";
+    (plain && name.to_ascii_lowercase().ends_with(".png")).then_some(name)
 }
 
 // ------------------------------------------------------------------ locations
@@ -375,11 +387,19 @@ impl StylePlugin for ProcessPlugin {
             params: params.0.clone(),
             seed: ctx.seed & SEED_MASK,
             scale: img.long_side() as f32 / REFERENCE_LONG_SIDE,
+            snapshots: None,
         };
+        let mut request = request;
+        if ctx.recording() {
+            let dir = job.0.join("snapshots");
+            std::fs::create_dir(&dir).map_err(|e| fail("cannot create the snapshots folder", &e))?;
+            request.snapshots = Some(dir);
+        }
         let json = serde_json::to_string_pretty(&request).map_err(|e| fail("cannot encode the request", &e))?;
         std::fs::write(&request_path, json).map_err(|e| fail("cannot write the request", &e))?;
 
         let mut reported: Option<String> = None;
+        let mut snapshots = 0usize;
         let request_arg = request_path.to_string_lossy().to_string();
         let result =
             run(&self.dir, self.manifest.command(), &["render", &request_arg], timeout(&self.manifest), Some(&ctx.cancel), |line| {
@@ -389,6 +409,16 @@ impl StylePlugin for ProcessPlugin {
                     }
                     if let Some(e) = msg.error {
                         reported = Some(e);
+                    }
+                    // Decoded with the hardened photo decoder; frames of the
+                    // wrong size, or past the limit, are ignored.
+                    if let (Some(dir), Some(name)) = (&request.snapshots, msg.snapshot.as_deref().and_then(snapshot_file_name))
+                        && snapshots < MAX_SNAPSHOTS
+                        && let Ok(rgb) = photo_io::load_photo(&dir.join(name))
+                        && (rgb.width() as usize, rgb.height() as usize) == (img.w, img.h)
+                    {
+                        snapshots += 1;
+                        ctx.snapshot(&Img::from_rgb8(&rgb));
                     }
                 }
             });
@@ -718,6 +748,23 @@ mod tests {
             let img = test_image(96, 64);
             let out = plugin.render(&img, &Params::defaults(plugin.description()), &Ctx::for_image(&img, 3)).unwrap();
             assert_eq!((out.w, out.h), (96, 64));
+            // Time-lapse snapshots travel through the contract and leave the
+            // result unchanged. Retro Print supports them; Copperplate doesn't.
+            let (recorded, snapshots) =
+                crate::timelapse::record(plugin.as_ref(), &img, &Params::defaults(plugin.description()), Ctx::for_image(&img, 3)).unwrap();
+            assert!(recorded.px == out.px, "{id} changed while recording");
+            if id == "retro-print" {
+                assert_eq!(snapshots.len(), 3, "retro-print snapshots");
+            }
+        }
+    }
+
+    #[test]
+    fn snapshot_names_stay_inside_the_snapshots_folder() {
+        assert_eq!(snapshot_file_name("snapshot-01.png"), Some("snapshot-01.png"));
+        assert_eq!(snapshot_file_name("Frame.PNG"), Some("Frame.PNG"));
+        for bad in ["", "..", "../x.png", "a/b.png", "a\\b.png", "C:x.png", "frame.jpg", "/etc/x.png"] {
+            assert_eq!(snapshot_file_name(bad), None, "{bad}");
         }
     }
 

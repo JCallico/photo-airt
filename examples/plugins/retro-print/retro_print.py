@@ -17,6 +17,7 @@ deterministic and resolution independent by nature, so it ignores `seed` and
 """
 
 import json
+import os
 import struct
 import sys
 import zlib
@@ -134,7 +135,11 @@ def render(request_path):
     tr, tg, tb = tables(levels, bool(params["invert"]), params["ink"])
 
     width, height, rows = read_png(req["input"])
+    # Optional: while a time-lapse is recorded, "snapshots" names a folder
+    # for intermediate PNGs. Here the print appears from top to bottom.
+    snapshots = req.get("snapshots")
     out, report_every = [], max(1, height // 10)
+    snapshot_every = max(1, height // 4)
     for y, row in enumerate(rows):
         line = bytearray(row)
         line[0::3] = row[0::3].translate(tr)
@@ -143,6 +148,10 @@ def render(request_path):
         out.append(bytes(line))
         if y % report_every == 0:
             say(progress=round(y / height, 3))
+        if snapshots and (y + 1) % snapshot_every == 0 and y + 1 < height:
+            name = f"snapshot-{(y + 1) // snapshot_every:02d}.png"
+            write_png(os.path.join(snapshots, name), width, height, out + rows[y + 1 :])
+            say(snapshot=name)
     write_png(req["output"], width, height, out)
     say(progress=1.0)
 
