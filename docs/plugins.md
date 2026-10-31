@@ -220,6 +220,29 @@ When you're done:
 Photo·AIrt then checks that `output` exists, is a valid image and has the
 input's size. Anything else counts as a failed render.
 
+### Time-lapses (optional)
+
+When the user exports a time-lapse (a looping GIF of the artwork being
+painted), `request.json` also carries a `snapshots` folder:
+
+```json
+{ …, "snapshots": "/…/plugin-jobs/…/snapshots" }
+```
+
+At the natural end of each pass, write the picture so far there as an 8-bit
+PNG of exactly `width` × `height`, and announce it by file name:
+
+```text
+{"snapshot": "snapshot-03.png"}
+```
+
+Photo·AIrt crossfades the snapshots, in order, between the photo and your
+result. Names must be plain file names ending in `.png`, inside that folder;
+frames of the wrong size are skipped, and at most 400 are used. Taking
+snapshots must not change your result. Supporting them is optional: if you
+ignore `snapshots`, the time-lapse sweeps from the photo into your result.
+`examples/plugins/retro-print` shows how, printing from top to bottom.
+
 Other rules:
 
 - **Cancellation:** when the user moves on (for example by dragging a slider
@@ -409,7 +432,9 @@ pub fn render(src: &Img, p: &Params, ctx: &Ctx) -> Option<Img> {
 ```
 
 `photo_airt_sdk::serve` handles the `render` command, reading the request,
-the PNG files, progress lines and errors. `photo_airt_sdk::imaging` holds the
+the PNG files, progress lines, errors and time-lapse snapshots: call
+`ctx.snapshot(&img)` at the end of a pass, and check `ctx.recording()` before
+computing anything only a time-lapse needs. `photo_airt_sdk::imaging` holds the
 raster primitives the built-in styles use: blurs, flow fields, LIC, Kuwahara
 and XDoG filters, noise and a seeded `Rng`. They're compiled into your
 executable, so the plug-in stays self-contained (D8).

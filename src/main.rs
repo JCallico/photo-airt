@@ -7,6 +7,7 @@ mod photo_io;
 mod plugins;
 mod sources;
 mod theme;
+mod timelapse;
 mod ui_canvas;
 mod ui_open;
 mod ui_panels;
@@ -133,8 +134,11 @@ fn marked_path(output: &str) -> Option<&str> {
 }
 
 /// Headless batch mode, handy for scripting and for comparing styles:
-/// `photo-airt --render <style-id|all> <input> <out-dir> [long-side]`
+/// `photo-airt --render <style-id|all> <input> <out-dir> [long-side] [--timelapse]`
 fn headless(args: &[String]) -> anyhow::Result<()> {
+    // `--timelapse` may appear anywhere after the mode.
+    let timelapse = args.iter().any(|a| a == "--timelapse");
+    let args: Vec<String> = args.iter().filter(|a| *a != "--timelapse").cloned().collect();
     let style = args.first().map(String::as_str).unwrap_or("all");
     let input = resolve_input(args.get(1).ok_or_else(|| anyhow::anyhow!("missing input path or link"))?)?;
     let out_dir = PathBuf::from(args.get(2).map(String::as_str).unwrap_or("."));
@@ -153,6 +157,14 @@ fn headless(args: &[String]) -> anyhow::Result<()> {
             .map_err(|e| anyhow::anyhow!("{}: {e}", plugin.id()))?;
         println!("{:<14} {:>6} ms", plugin.id(), t.elapsed().as_millis());
         out.to_rgb8().save(out_dir.join(format!("{}.jpg", plugin.id())))?;
+        if timelapse {
+            let small = photo.fit_long(timelapse::LONG_SIDE);
+            let params = plugins::Params::defaults(plugin.description());
+            let (art, snapshots) = timelapse::record(plugin.as_ref(), &small, &params, plugins::Ctx::for_image(&small, 7))?;
+            let stills = timelapse::compose(&small, &snapshots, &art, &finish::Finish::default());
+            timelapse::encode_gif(&stills, &out_dir.join(format!("{}-timelapse.gif", plugin.id())))?;
+            println!("{:<14} time-lapse: {} snapshots, {} frames", "", snapshots.len(), stills.len());
+        }
     }
     Ok(())
 }

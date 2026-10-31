@@ -37,6 +37,10 @@
 - `src/ui_plugins.rs` draws the Plug-ins panel.
 - `src/finish.rs` is the non-destructive finishing layer applied to every
   artwork.
+- `src/timelapse.rs` records, composes and encodes painting time-lapses
+  (BL-004). Styles hand intermediate images to `ctx.snapshot()` at the ends
+  of their passes; taking snapshots must never change the result (a unit test
+  checks every built-in style).
 - `src/ai.rs` integrates the CLIs. It covers CLI and model discovery, roles
   (Art Director and Master Painter), prefs and model health, jobs, prompts,
   and the `claude` and `codex` process runners.
@@ -161,7 +165,9 @@ the dev profile already optimises dependencies.
     in `Cargo.toml` and `STYLES` in `src/plugins/builtin.rs`.
   - Scale size-like parameters with `ctx.px()` so thumbnails, previews and
     full-resolution exports look alike.
-  - Report progress through `ctx.progress()`.
+  - Report progress through `ctx.progress()`, and hand the ends of
+    visible passes to `ctx.snapshot()` for time-lapses, without changing the
+    final image.
   - Honour `ctx.cancelled()` in long loops.
   - Stay deterministic for a given seed.
 - **Public interfaces** must stay compatible:
