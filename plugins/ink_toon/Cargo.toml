@@ -1,6 +1,6 @@
 [package]
 name = "photo-airt-ink-toon"
-version = "0.5.2"
+version = "0.6.0"
 edition = "2024"
 description = "Ink & Toon: a Photo·AIrt style plug-in"
 license = "MIT"
@@ -13,4 +13,4 @@ name = "ink_toon"
 path = "src/main.rs"
 
 [dependencies]
-photo-airt-sdk = { path = "../../sdk", version = "0.5.2" }
+photo-airt-sdk = { path = "../../sdk", version = "0.6.0" }

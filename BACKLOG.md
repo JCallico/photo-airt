@@ -698,7 +698,7 @@ precise black-ink dot style.
 
 ## BL-004 · Painting time-lapse export
 
-**Status:** In progress · **Area:** export, plug-in contract ·
+**Status:** Done (v0.6.0) · **Area:** export, plug-in contract ·
 **Depends on:** BL-001
 
 ### Summary

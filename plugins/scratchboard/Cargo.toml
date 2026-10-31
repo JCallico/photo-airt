@@ -1,6 +1,6 @@
 [package]
 name = "photo-airt-scratchboard"
-version = "0.5.2"
+version = "0.6.0"
 edition = "2024"
 description = "Scratchboard: a Photo·AIrt style plug-in"
 license = "MIT"
@@ -13,5 +13,5 @@ name = "scratchboard"
 path = "src/main.rs"
 
 [dependencies]
-photo-airt-sdk = { path = "../../sdk", version = "0.5.2" }
+photo-airt-sdk = { path = "../../sdk", version = "0.6.0" }
 rayon = "1.12"
