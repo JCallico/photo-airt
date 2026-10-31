@@ -30,8 +30,9 @@ impl App {
             .inner_margin(Margin::same(22))
             .shadow(egui::epaint::Shadow { offset: [0, 18], blur: 50, spread: 0, color: Color32::from_black_alpha(170) });
         let builtin = plugins::Registry::builtin_ids().len();
-        let modal =
-            egui::Modal::new(egui::Id::new("plugins-panel")).frame(frame).backdrop_color(Color32::from_black_alpha(150)).show(ctx, |ui| {
+        let modal = egui::Modal::new(egui::Id::unique("plugins-panel")).frame(frame).backdrop_color(Color32::from_black_alpha(150)).show(
+            ctx,
+            |ui| {
                 let w = 760.0;
                 ui.set_width(w);
                 ui.horizontal(|ui| {
@@ -161,7 +162,8 @@ impl App {
                         ui.add_space(6.0);
                     }
                 });
-            });
+            },
+        );
         if modal.should_close() {
             self.plugins_open = false;
         }

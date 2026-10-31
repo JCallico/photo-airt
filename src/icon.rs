@@ -47,7 +47,7 @@ pub fn window_icon() -> egui::IconData {
 /// Paints the logo into `rect`, rasterised once per physical size.
 pub fn paint_mark(ui: &Ui, rect: Rect, tint: Color32) {
     let px = (rect.width().max(rect.height()) * ui.ctx().pixels_per_point()).round().max(1.0) as u32;
-    let id = egui::Id::new(("photo-airt-mark", px));
+    let id = egui::Id::unique(("photo-airt-mark", px));
     let texture = ui.ctx().data_mut(|d| d.get_temp::<TextureHandle>(id)).or_else(|| {
         let svg = if px < SMALL_CUT_PX { MARK_SMALL } else { MARK };
         let texture = ui.ctx().load_texture(format!("photo-airt-mark-{px}"), render(svg, px)?, TextureOptions::LINEAR);

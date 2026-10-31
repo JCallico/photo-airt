@@ -73,7 +73,7 @@ impl App {
             .inner_margin(Margin::same(22))
             .shadow(egui::epaint::Shadow { offset: [0, 18], blur: 50, spread: 0, color: Color32::from_black_alpha(170) });
         let modal =
-            egui::Modal::new(egui::Id::new("open-sheet")).frame(frame).backdrop_color(Color32::from_black_alpha(150)).show(ctx, |ui| {
+            egui::Modal::new(egui::Id::unique("open-sheet")).frame(frame).backdrop_color(Color32::from_black_alpha(150)).show(ctx, |ui| {
                 let w = 700.0;
                 ui.set_width(w);
                 ui.horizontal(|ui| {
@@ -312,7 +312,7 @@ impl App {
             .stroke(Stroke::new(1.0, LINE))
             .inner_margin(Margin::same(22))
             .shadow(egui::epaint::Shadow { offset: [0, 18], blur: 50, spread: 0, color: Color32::from_black_alpha(170) });
-        let modal = egui::Modal::new(egui::Id::new("photos-overview")).frame(frame).backdrop_color(Color32::from_black_alpha(150)).show(
+        let modal = egui::Modal::new(egui::Id::unique("photos-overview")).frame(frame).backdrop_color(Color32::from_black_alpha(150)).show(
             ctx,
             |ui| {
                 let w = 820.0;
