@@ -118,6 +118,27 @@ pub fn render(src: &Img, p: &Params, ctx: &Ctx) -> Option<Img> {
             placed += 1;
         }
     }
+    if ctx.recording() {
+        paint_light_to_dark(src, &out, ctx);
+    }
     ctx.progress(0.98);
     Some(out)
+}
+
+/// Time-lapse frames the way a watercolourist works: the pencil underdrawing
+/// on paper, then washes from the lightest areas to the darkest.
+fn paint_light_to_dark(src: &Img, out: &Img, ctx: &Ctx) {
+    let (w, h) = (src.w, src.h);
+    let e = xdog(&src.luma(), w, h, ctx.px(1.1).max(0.6), 18.0, 0.82, 12.0);
+    let sketch = src.map_xy(|x, y, _| {
+        let v = 1.0 - (1.0 - e[y * w + x]) * 0.5;
+        scale(PAPER, v)
+    });
+    ctx.snapshot(&sketch);
+    let lum = out.luma();
+    let steps = 10;
+    for k in 1..steps {
+        let t = 1.0 - k as f32 / steps as f32;
+        ctx.snapshot(&sketch.map_xy(|x, y, c| mix(c, out.at(x, y), smoothstep(t + 0.06, t + 0.16, lum[y * w + x] + 0.1))));
+    }
 }

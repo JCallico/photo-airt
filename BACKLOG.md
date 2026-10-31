@@ -693,3 +693,55 @@ exact print and pixel structure that image models only imitate.
 
 **Possible follow-up:** Weighted Voronoi stippling (Secord 2002) as a
 precise black-ink dot style.
+
+---
+
+## BL-004 · Painting time-lapse export
+
+**Status:** In progress · **Area:** export, plug-in contract ·
+**Depends on:** BL-001
+
+### Summary
+
+One action, **Export time-lapse**, saves a short looping animation of the
+selected artwork being painted: the photo, then the canvas building up pass
+by pass (coarse strokes, then detail), ending on the finished piece. It
+shows what only the algorithms can, since image models return just the final
+picture, and it is the most shareable thing the app makes.
+
+### Design
+
+- **Snapshots:** styles hand intermediate images to `Ctx::snapshot` at the
+  natural ends of their passes. The context only records when a time-lapse is
+  being made, so ordinary renders cost nothing extra, and recording must never
+  change the final image (a unit test renders every built-in style both ways
+  and compares them). Impressionist Strokes paints each layer in six chunks
+  of strokes; Watercolour adds a pencil underdrawing and washes from light to
+  dark; Graphite Sketch, Stained Glass and Low Poly snapshot their stages.
+- **Fallback:** styles that take no snapshots still get a time-lapse: a brush
+  sweep from the photo into the artwork, like the stage's reveal.
+- **Same artwork:** the export re-renders the kept artwork's style with the
+  same settings and seed, applies its finishing layer to every frame, and so
+  ends exactly on it. It runs on a background thread, like the
+  full-resolution export.
+- **Format:** an infinitely looping GIF (long side 640 px, about 30 frames
+  plus holds on the photo and the artwork), encoded with the `image` crate
+  the app already uses. No new dependency. Files are 2–7 MB.
+- **Plug-in contract (additive):** `request.json` may carry a `snapshots`
+  folder. A plug-in that supports time-lapses writes PNG frames there and
+  prints `{"snapshot": "<file name>"}`; the app decodes each one with its
+  hardened decoder and checks its size. Plug-ins that ignore the field keep
+  working, and the Rust SDK supports it automatically.
+- **Command line:** `photo-airt --render <style|all> <photo> <out-dir>
+  [long-side] --timelapse` also writes `<style>-timelapse.gif`.
+
+### Open questions
+
+- Animated WebP or MP4 would be smaller and full-colour, but need a new
+  dependency (libwebp bindings, or an encoder like ffmpeg). A shared palette
+  with frame differencing (the `gif` crate, already in the dependency tree)
+  could also shrink the GIFs. Revisit if size or banding becomes a problem.
+- Snapshots for the remaining styles (Oil on Canvas, Scratchboard, Ink &
+  Toon, CMYK Halftone, Pixel Art), which use the sweep today.
+- Whether AI artworks could get a time-lapse (for example from Claude's SVG
+  stroke order).

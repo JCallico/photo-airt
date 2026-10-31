@@ -198,6 +198,7 @@ pub fn render(src: &Img, p: &Params, ctx: &Ctx) -> Option<Img> {
         c = scale(c, 1.08 - 0.12 * (-dt[i] / d1).exp());
         add(c, scale([1.0, 0.97, 0.9], glow * 0.12 * (1.0 - (-dt[i] / d2).exp())))
     });
+    ctx.snapshot(&glass);
     let bloom = blur_img(&glass, ctx.px(10.0));
     let lw = ctx.px(p.get("lead")).max(0.6);
     let out = glass.map_xy(|x, y, c| {

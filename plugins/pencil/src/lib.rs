@@ -121,6 +121,12 @@ pub fn render(src: &Img, p: &Params, ctx: &Ctx) -> Option<Img> {
 
     // Outline strokes.
     let strokes = stroke_map(&lum, w, h, ctx.px(p.get("stroke")).max(3.0), ctx)?;
+    if ctx.recording() {
+        ctx.snapshot(&src.map_xy(|x, y, _| {
+            let v = strokes[y * w + x].clamp(0.0, 1.0);
+            mul([v * 0.97, v * 0.97, v], [0.985, 0.975, 0.95])
+        }));
+    }
 
     // Tone, then the pencil texture rendered to that tone: H^β ≈ J, with β
     // from the locally averaged texture so the hatching keeps its grain.

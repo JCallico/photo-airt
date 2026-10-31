@@ -91,15 +91,22 @@ pub fn slug(s: &str) -> String {
 
 /// Save without overwriting: `name.png`, `name-2.png`, ...
 pub fn save_unique(img: &image::RgbImage, dir: &Path, stem: &str) -> Result<PathBuf> {
+    let path = unique_path(dir, stem, "png")?;
+    img.save(&path).with_context(|| format!("saving {}", path.display()))?;
+    Ok(path)
+}
+
+/// A new file name in `dir` for `stem` (slugged) and `ext`, numbered so it
+/// never replaces an earlier export. Creates `dir`.
+pub fn unique_path(dir: &Path, stem: &str, ext: &str) -> Result<PathBuf> {
     std::fs::create_dir_all(dir)?;
     let stem = if stem.is_empty() { "artwork".to_string() } else { slug(stem) };
-    let mut path = dir.join(format!("{stem}.png"));
+    let mut path = dir.join(format!("{stem}.{ext}"));
     let mut n = 2;
     while path.exists() {
-        path = dir.join(format!("{stem}-{n}.png"));
+        path = dir.join(format!("{stem}-{n}.{ext}"));
         n += 1;
     }
-    img.save(&path).with_context(|| format!("saving {}", path.display()))?;
     Ok(path)
 }
 
