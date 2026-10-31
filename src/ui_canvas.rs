@@ -456,7 +456,7 @@ impl App {
             painter.text(pos2(c.x, y - 12.0), Align2::CENTER_BOTTOM, "RECENT", FontId::proportional(10.5), FAINT);
             for (i, r) in items.iter().enumerate() {
                 let rect = Rect::from_min_size(pos2(c.x - total / 2.0 + i as f32 * (tw + gap), y), vec2(tw, th));
-                let resp = ui.interact(rect, egui::Id::new(("empty-recent", i)), Sense::click());
+                let resp = ui.interact(rect, egui::Id::unique(("empty-recent", i)), Sense::click());
                 let hov = ui.ctx().animate_bool(resp.id, resp.hovered());
                 if let Some(tex) = self.recent_texture(&r.thumb) {
                     let size = tex.size();

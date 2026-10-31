@@ -571,7 +571,14 @@ impl App {
                 }
             });
             ui.add_space(4.0);
-            ui.add(egui::TextEdit::multiline(&mut self.paint_brief).desired_rows(3).desired_width(f32::INFINITY).hint_text("Describe the medium…"));
+            ui.add(
+                egui::TextEdit::multiline(&mut self.paint_brief)
+                    .desired_rows(3)
+                    .desired_width(f32::INFINITY)
+                    // egui's previous default; newer versions take a wider margin from the theme.
+                    .margin(Margin::symmetric(5, 3))
+                    .hint_text("Describe the medium…"),
+            );
             ui.add_enabled_ui(director.is_some(), |ui| {
                 ui.checkbox(&mut self.duet, RichText::new(format!("Duet: {d_name} writes a photo-specific brief first")).size(12.0))
                     .on_hover_text("The Art Director looks at your photo and expands the style into a detailed prompt, then the Master Painter paints it.");
@@ -1288,7 +1295,8 @@ impl App {
             return;
         }
         let now = self.now();
-        egui::Area::new(egui::Id::new("toasts")).anchor(Align2::RIGHT_BOTTOM, vec2(-330.0, -140.0)).interactable(false).show(ctx, |ui| {
+        let id = egui::Id::unique("toasts");
+        egui::Area::new(id).anchor(Align2::RIGHT_BOTTOM, vec2(-330.0, -140.0)).interactable(false).show(ctx, |ui| {
             for t in &self.toasts {
                 let age = (now - t.born) as f32;
                 let alpha = (age / 0.2).min(1.0) * ((5.0 - age) / 0.6).clamp(0.0, 1.0);
@@ -1321,7 +1329,7 @@ impl App {
             return;
         }
         let rect = ctx.content_rect();
-        let p = ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::new("drop")));
+        let p = ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::unique("drop")));
         p.rect_filled(rect, CornerRadius::ZERO, Color32::from_black_alpha(190));
         p.rect_stroke(rect.shrink(30.0), CornerRadius::same(24), Stroke::new(2.0, GOLD), egui::StrokeKind::Inside);
         p.text(rect.center(), Align2::CENTER_CENTER, "Drop to open your photo", FontId::new(36.0, serif_italic()), TEXT);

@@ -46,6 +46,9 @@ fn main() -> anyhow::Result<()> {
             .with_inner_size([1560.0, 960.0])
             .with_min_inner_size([1100.0, 680.0])
             .with_drag_and_drop(true),
+        // The bundled fonts cover the UI; system fonts would make icons
+        // look different on each OS.
+        system_font_fallback: false,
         ..Default::default()
     };
     eframe::run_native("Photo·AIrt", options, Box::new(move |cc| Ok(Box::new(app::App::new(cc, initial)))))
