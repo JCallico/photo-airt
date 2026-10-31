@@ -25,9 +25,10 @@ notarization. The macOS bundle is signed ad hoc by
 [`packaging/macos/bundle.sh`](../packaging/macos/bundle.sh), so Gatekeeper
 blocks a downloaded copy until its quarantine attribute is cleared, and
 Windows SmartScreen may warn about the unsigned executable. The macOS builds
-currently use macOS 14 (Apple Silicon) and macOS 15 (Intel); test older
-systems before claiming compatibility. AI features continue to use separately
-installed, logged-in Claude Code or Codex CLIs.
+currently use macOS 15 runners (Apple Silicon and Intel) and target macOS 11
+and later (the Rust default and the bundle's `LSMinimumSystemVersion`); test
+older systems before claiming compatibility. AI features continue to use
+separately installed, logged-in Claude Code or Codex CLIs.
 
 ## The app icon
 
