@@ -332,6 +332,15 @@ The collection bar holds each photo's artworks. A new render replaces the curren
 (`Ctrl+S`) re-renders algorithmic pieces at the photo's full resolution and
 saves them to `~/Pictures/Photo-AIrt`.
 
+**Time-lapse** (the film-strip button beside Export, or `Ctrl+Shift+S`) saves
+a looping GIF of an algorithmic piece being painted: the photo, then the
+canvas building up pass by pass, ending on the finished artwork with its
+finishing applied. Impressionist Strokes shows coarse strokes giving way to
+fine ones; Watercolour starts from a pencil underdrawing and lays washes from
+light to dark; Graphite Sketch, Stained Glass and Low Poly show their stages.
+Other styles sweep from the photo into the artwork. The GIF is 640 px on its
+long side and goes to the same folder.
+
 | Key | Action |
 |---|---|
 | `Space` (hold) | Show the original |
@@ -342,6 +351,7 @@ saves them to `~/Pictures/Photo-AIrt`.
 | `K` / `R` | Keep the draft / reroll the seed |
 | `A` | Switch between Algorithms and AI Studio |
 | `Ctrl+O` / `Ctrl+S` | Open a photo / export |
+| `Ctrl+Shift+S` | Export a time-lapse GIF |
 | `Ctrl+V` | Open a copied link or file path |
 
 ## Command line
@@ -349,6 +359,7 @@ saves them to `~/Pictures/Photo-AIrt`.
 ```bash
 photo-airt https://en.wikipedia.org/wiki/The_Starry_Night       # open a link (or a path) in the studio
 photo-airt --render <style-id|all> in.jpg out_dir [long-side]   # batch-render styles
+photo-airt --render <style-id|all> in.jpg out_dir --timelapse   # …and a time-lapse GIF of each
 PHOTO_AIRT_DIRECTOR=codex:gpt-5.6-luna PHOTO_AIRT_PAINTER=claude:sonnet \
   photo-airt --ai <director|vector|repaint|duet|placard> in.jpg [out.png]   # run one AI job
 ```

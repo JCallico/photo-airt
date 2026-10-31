@@ -211,21 +211,31 @@ pub fn render(src: &Img, p: &Params, ctx: &Ctx) -> Option<Img> {
         }
         let ranges: Vec<(f32, f32)> = strokes.iter().map(stroke_y_range).collect();
         let band_h = 32usize;
-        canvas
-            .px
-            .par_chunks_mut(w * band_h)
-            .zip(painted.par_chunks_mut(w * band_h))
-            .zip(height.par_chunks_mut(w * band_h))
-            .enumerate()
-            .for_each(|(bi, ((cv, pt), ht))| {
-                let y_lo = bi * band_h;
-                let y_hi = (y_lo + band_h).min(h);
-                for (s, &(lo, hi)) in strokes.iter().zip(ranges.iter()) {
-                    if hi >= y_lo as f32 && lo < y_hi as f32 {
-                        paint_stroke_band(cv, pt, ht, w, y_lo, y_hi, s, bristles, max_r);
+        // A time-lapse paints each layer in a few chunks of strokes. Every
+        // pixel still receives its strokes in the same order, so the result
+        // is identical.
+        let chunks = if ctx.recording() { 6 } else { 1 };
+        let per_chunk = strokes.len().div_ceil(chunks).max(1);
+        for (strokes, ranges) in strokes.chunks(per_chunk).zip(ranges.chunks(per_chunk)) {
+            canvas
+                .px
+                .par_chunks_mut(w * band_h)
+                .zip(painted.par_chunks_mut(w * band_h))
+                .zip(height.par_chunks_mut(w * band_h))
+                .enumerate()
+                .for_each(|(bi, ((cv, pt), ht))| {
+                    let y_lo = bi * band_h;
+                    let y_hi = (y_lo + band_h).min(h);
+                    for (s, &(lo, hi)) in strokes.iter().zip(ranges.iter()) {
+                        if hi >= y_lo as f32 && lo < y_hi as f32 {
+                            paint_stroke_band(cv, pt, ht, w, y_lo, y_hi, s, bristles, max_r);
+                        }
                     }
-                }
-            });
+                });
+            if ctx.recording() {
+                ctx.snapshot(&apply_relief(&canvas, &blur(&height, w, h, 0.6), p.get("impasto") * 0.8));
+            }
+        }
         ctx.progress(0.05 + 0.9 * (l + 1) as f32 / layers as f32);
     }
     let height = blur(&height, w, h, 0.6);
