@@ -12,7 +12,7 @@ categories = ["multimedia::images", "graphics"]
 
 [dependencies]
 eframe = { version = "0.36", features = ["persistence"] }
-egui = "0.36"
+egui = "0.37"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp", "tiff", "bmp", "gif", "rayon"] }
 rayon = "1.12"
 serde = { version = "1", features = ["derive"] }
