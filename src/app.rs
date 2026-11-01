@@ -486,7 +486,7 @@ impl App {
 
     pub fn export_selected(&mut self) {
         let (Some(photo), Some(a)) = (&self.photo, self.selected_artwork()) else {
-            self.toast("Select an artwork to export", crate::theme::MUTED);
+            self.toast("Select an artwork to save", crate::theme::MUTED);
             return;
         };
         if self.exporting {
@@ -515,7 +515,7 @@ impl App {
             }
         };
         self.exporting = true;
-        self.toast("Exporting at full resolution…", crate::theme::GOLD);
+        self.toast("Saving at full resolution…", crate::theme::GOLD);
         std::thread::spawn(move || {
             let r = job().map_err(|e| format!("{e:#}"));
             let _ = tx.send(WorkerMsg::Exported(r));
@@ -527,7 +527,7 @@ impl App {
     /// painted (BL-004), re-rendered with its style, settings and seed.
     pub fn export_timelapse(&mut self) {
         let (Some(photo), Some(a)) = (&self.photo, self.selected_artwork()) else {
-            self.toast("Select an artwork to export", crate::theme::MUTED);
+            self.toast("Select an artwork to save", crate::theme::MUTED);
             return;
         };
         let Some((style, params, seed)) = a.recipe.clone().filter(|_| a.kind == Kind::Algorithm) else {
@@ -925,7 +925,7 @@ impl App {
                 self.exporting = false;
                 match r {
                     Ok(p) => self.toast(format!("Saved {}", p.display()), crate::theme::GOLD),
-                    Err(e) => self.toast(format!("Export failed: {e}"), crate::theme::DANGER),
+                    Err(e) => self.toast(format!("Save failed: {e}"), crate::theme::DANGER),
                 }
             }
         }

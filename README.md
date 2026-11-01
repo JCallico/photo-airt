@@ -328,11 +328,11 @@ Views switch with keys `1`–`4`:
 * **Gallery.**
 
 The collection bar holds each photo's artworks. A new render replaces the current
-*draft*. Keep a draft with `K` and it becomes a permanent piece. **Export**
+*draft*. Keep a draft with `K` and it becomes a permanent piece. **Save**
 (`Ctrl+S`) re-renders algorithmic pieces at the photo's full resolution and
 saves them to `~/Pictures/Photo-AIrt`.
 
-**Time-lapse** (the film-strip button beside Export, or `Ctrl+Shift+S`) saves
+**Time-lapse** (the film-strip button beside Save, or `Ctrl+Shift+S`) saves
 a looping GIF of an algorithmic piece being painted: the photo, then the
 canvas building up pass by pass, ending on the finished artwork with its
 finishing applied. Impressionist Strokes shows coarse strokes giving way to
@@ -350,8 +350,8 @@ long side and goes to the same folder.
 | `P` | All photos (contact sheet) |
 | `K` / `R` | Keep the draft / reroll the seed |
 | `A` | Switch between Algorithms and AI Studio |
-| `Ctrl+O` / `Ctrl+S` | Open a photo / export |
-| `Ctrl+Shift+S` | Export a time-lapse GIF |
+| `Ctrl+O` / `Ctrl+S` | Open a photo / save the selected artwork |
+| `Ctrl+Shift+S` | Save a time-lapse GIF |
 | `Ctrl+V` | Open a copied link or file path |
 
 ## Command line

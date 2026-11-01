@@ -118,7 +118,7 @@ impl App {
                         ClipStatus::Image { width, height, .. } => {
                             ("📋", format!("Press Enter to open the image on your clipboard ({width} × {height})"), GOLD)
                         }
-                        _ => ("✦", "Tip: Ctrl+V a link anywhere in the studio, or drop files on the window".to_string(), FAINT),
+                        _ => ("💡", "Tip: Ctrl+V a link anywhere in the studio, or drop files on the window".to_string(), FAINT),
                     }
                 } else {
                     match &classified {

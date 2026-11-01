@@ -225,23 +225,21 @@ impl App {
                 // Never draw over the left side: past the last step, the
                 // right side is cut off instead.
                 ui.set_clip_rect(ui.max_rect().intersect(ui.clip_rect()));
-                let can_export = self.selected_artwork().is_some();
-                let label = if self.exporting { "Exporting…" } else { "Export" };
-                let mut child = ui.new_child(
-                    egui::UiBuilder::new().max_rect(ui.available_rect_before_wrap()).layout(Layout::right_to_left(Align::Center)),
-                );
-                child.set_width(step(130.0, 96.0, 72.0));
-                if theme::accent_button(&mut child, label, GOLD, can_export && !self.exporting)
+                let can_save = self.selected_artwork().is_some();
+                let label = if self.exporting { "Saving…" } else { "Save" };
+                // The bar's button size, in the gold of the main action.
+                let save = egui::Button::new(RichText::new(label).color(Color32::WHITE)).fill(GOLD.gamma_multiply(0.85));
+                if ui
+                    .add_enabled(can_save && !self.exporting, save)
                     .on_hover_text("Save the selected artwork at full resolution to ~/Pictures/Photo-AIrt (Ctrl+S)")
                     .clicked()
                 {
                     self.export_selected();
                 }
-                ui.add_space(child.min_rect().width() + 6.0);
                 let can_timelapse = self.selected_artwork().is_some_and(|a| a.kind == Kind::Algorithm && a.recipe.is_some());
                 if ui
                     .add_enabled(can_timelapse && !self.exporting, egui::Button::new("🎞"))
-                    .on_hover_text("Export a time-lapse GIF of this artwork being painted (Ctrl+Shift+S)")
+                    .on_hover_text("Save a time-lapse GIF of this artwork being painted (Ctrl+Shift+S)")
                     .on_disabled_hover_text("Time-lapses are made from algorithm styles: select one of their artworks")
                     .clicked()
                 {
@@ -1214,7 +1212,7 @@ impl App {
                                 if !a.pinned && ui.button("📌 Keep in collection").clicked() {
                                     *action = Some(FilmAction::Pin(a.id));
                                 }
-                                if ui.button("Export…").clicked() {
+                                if ui.button("Save").clicked() {
                                     *action = Some(FilmAction::Export(a.id));
                                 }
                                 if ui.button("🗑 Remove").clicked() {
