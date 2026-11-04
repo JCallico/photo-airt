@@ -15,11 +15,13 @@ Real Claude and Codex CLI execution is verified separately.
 1. Sign in to [Codecov with GitHub](https://app.codecov.io/login) and enable
    `JCallico/photo-airt`. Install the Codecov GitHub App for this repository
    so it can publish coverage checks and pull-request comments.
-2. Pushes to `main` and manual runs authenticate with GitHub OIDC. No
-   `CODECOV_TOKEN` repository secret is needed. The coverage job alone has
-   `id-token: write`; repository contents remain read-only.
-3. Public pull requests, including forks and Dependabot updates, upload
-   without a secret using Codecov's `pr<number>:<branch>` convention.
+2. Add the repository's Codecov upload token as the `CODECOV_TOKEN`
+   GitHub Actions secret. Pushes to `main`, manual runs and same-repository
+   pull requests authenticate with this secret. All jobs keep read-only
+   repository permissions.
+3. Public pull requests without access to the secret, including forks and
+   Dependabot updates, upload using Codecov's tokenless
+   `pr<number>:<branch>` convention.
 4. After the first successful `main` upload, the README coverage badge shows
    the baseline. Pull requests then report overall and changed-line coverage.
 
