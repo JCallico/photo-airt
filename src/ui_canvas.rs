@@ -612,3 +612,135 @@ impl App {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use egui::{Modifiers, pos2};
+
+    use super::*;
+    use crate::ai::{Engine, Placard};
+    use crate::app::test_support::*;
+
+    #[test]
+    fn images_fit_inside_the_space_keeping_their_shape() {
+        let area = Rect::from_min_size(pos2(10.0, 10.0), vec2(200.0, 100.0));
+        let wide = fit(area, 400.0, 100.0);
+        assert_eq!((wide.width(), wide.height()), (200.0, 50.0));
+        assert_eq!(wide.center(), area.center());
+        let tall = fit(area, 100.0, 400.0);
+        assert_eq!((tall.width(), tall.height()), (25.0, 100.0));
+    }
+
+    #[test]
+    fn easing_starts_at_zero_and_settles_at_one() {
+        assert_eq!((ease_out(0.0), ease_out(1.0)), (0.0, 1.0));
+        assert!(ease_out(0.5) > 0.5, "fast at first");
+    }
+
+    #[test]
+    fn each_kind_of_artwork_has_its_own_colour() {
+        let colours = [kind_color(Kind::Algorithm), kind_color(Kind::Ai(Engine::Claude)), kind_color(Kind::Ai(Engine::Codex))];
+        assert!(colours[0] != colours[1] && colours[1] != colours[2]);
+    }
+
+    #[test]
+    fn the_welcome_screen_invites_opening_a_photo() {
+        let mut s = studio();
+        s.frame();
+        assert!(s.shows("Photo·AIrt") && s.shows("Open a photo") && s.shows("Ctrl+O"), "{:?}", s.labels());
+        s.app.open(vec![crate::app_open::OpenRequest::Asset(photo_asset("loading.png"))]);
+        s.frame();
+        s.until("the photo", |a| a.photo.is_some());
+    }
+
+    #[test]
+    fn opening_shows_progress_in_place_of_the_invitation() {
+        let mut s = studio();
+        s.app.loading = Some(crate::app::LoadState {
+            batch: 1,
+            label: "beach.png".into(),
+            stage: "Downloading".into(),
+            done: 3 * 1024 * 1024,
+            total: Some(6 * 1024 * 1024),
+            cancel: Default::default(),
+        });
+        s.frame();
+        s.frame();
+        assert!(s.shows("beach.png"), "{:?}", s.labels());
+        assert!(!s.shows("Open a photo"));
+    }
+
+    #[test]
+    fn a_render_in_progress_is_announced_on_stage() {
+        let mut s = studio();
+        s.with_photo("p.png");
+        s.app.render = Some(crate::app::RenderJob { id: 1, style: "oil".into(), progress: Default::default(), cancel: Default::default() });
+        s.frame();
+        s.frame();
+        assert!(s.shows("Painting"), "{:?}", s.labels());
+        s.app.render = None;
+    }
+
+    #[test]
+    fn every_view_draws_the_artwork_and_its_captions() {
+        let mut s = studio();
+        s.with_draft("p.png");
+        s.app.artworks[0].title = "My Artwork".into();
+        for (view, expect) in [(View::Split, "Original"), (View::SideBySide, "Original"), (View::Gallery, "My Artwork")] {
+            s.app.view = view;
+            s.frame();
+            s.frame();
+            assert!(s.shows(expect), "no “{expect}” in {:?}", s.labels());
+        }
+        s.app.view = View::Single;
+        s.frame();
+        s.app.selected = None;
+        s.frame();
+        assert!(s.shows("Original"), "with nothing selected the photo itself shows: {:?}", s.labels());
+    }
+
+    #[test]
+    fn the_gallery_wall_shows_the_placard_and_offers_to_write_one() {
+        let mut s = studio();
+        s.with_draft("p.png");
+        s.app.view = View::Gallery;
+        s.app.artworks[0].placard =
+            Some(Placard { title: "Evening".into(), medium: "Oil".into(), year: "2026".into(), note: "A quiet scene".into() });
+        s.frame();
+        s.frame();
+        assert!(s.shows("Evening"), "{:?}", s.labels());
+        s.app.selected = None;
+        s.frame();
+        s.frame();
+        assert!(s.shows("Photograph, 96 × 64"), "{:?}", s.labels());
+    }
+
+    #[test]
+    fn the_reveal_animation_runs_and_ends() {
+        let mut s = studio();
+        s.with_draft("p.png");
+        let id = s.app.draft_id().unwrap();
+        for prev in [None, Some(s.app.artworks[0].tex.clone())] {
+            let start = s.app.now();
+            s.app.reveal = Some(crate::app::Reveal { artwork: id, prev, start });
+            s.frame();
+            s.app.reveal.as_mut().unwrap().start -= 100.0;
+            s.frame();
+            s.frame();
+            assert!(s.app.reveal.is_none(), "the animation is over");
+        }
+    }
+
+    #[test]
+    fn zooming_and_panning_the_stage_stay_within_bounds() {
+        let mut s = studio();
+        s.with_draft("p.png");
+        s.app.view = View::Single;
+        s.frame();
+        let centre = egui::Event::PointerMoved(pos2(800.0, 450.0));
+        s.frame_with(vec![centre], Modifiers::NONE, vec![]);
+        s.frame_with(vec![egui::Event::Zoom(2.0)], Modifiers::NONE, vec![]);
+        s.frame();
+        assert!(s.app.zoom.is_finite() && s.app.zoom >= 1.0, "{}", s.app.zoom);
+    }
+}

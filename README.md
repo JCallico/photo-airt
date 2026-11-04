@@ -1,5 +1,11 @@
 # Photo·AIrt
 
+[![CI](https://github.com/JCallico/photo-airt/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/JCallico/photo-airt/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/JCallico/photo-airt/branch/main/graph/badge.svg)](https://app.codecov.io/gh/JCallico/photo-airt)
+[![Release](https://img.shields.io/github/v/release/JCallico/photo-airt)](https://github.com/JCallico/photo-airt/releases/latest)
+[![Dependabot](https://img.shields.io/badge/dependencies-Dependabot-blue?logo=dependabot)](https://github.com/JCallico/photo-airt/network/updates)
+[![License: MIT](https://img.shields.io/github/license/JCallico/photo-airt)](LICENSE)
+
 Photo·AIrt is a native Rust desktop studio for turning your photographs into
 art. It combines hand-written image algorithms with AI, using the
 **Claude Code** and **Codex** CLIs you are already logged into. There are no
@@ -391,6 +397,23 @@ CI runs these checks on every pull request:
   plug-ins and every built-in style run as an external plug-in;
 - the `cargo-deny` policy;
 - GitHub dependency review.
+
+The [Coverage workflow](.github/workflows/coverage.yml) runs the workspace
+tests with LLVM instrumentation on Linux and uploads the LCOV report to
+[Codecov](https://app.codecov.io/gh/JCallico/photo-airt). Reports are also
+available as workflow artifacts. To measure coverage locally, install
+[`cargo-llvm-cov`](https://github.com/taiki-e/cargo-llvm-cov), then run:
+
+```bash
+rustup component add llvm-tools-preview
+mkdir -p target/coverage
+cargo llvm-cov --release --workspace --locked --lcov --output-path target/coverage/lcov.info
+```
+
+Dependabot checks Cargo dependencies and pinned GitHub Actions every Monday.
+Minor and patch updates are grouped; major upgrades remain separate.
+Security updates are enabled and grouped for Cargo. See
+[docs/ci.md](docs/ci.md) for Codecov setup and CI tool maintenance.
 
 The `cargo-deny` policy also runs weekly, so new RustSec advisories surface
 even when the code hasn't changed.

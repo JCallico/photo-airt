@@ -68,13 +68,21 @@ fn decode_via_cli(path: &Path) -> Result<image::RgbImage> {
     Err(last)
 }
 
+/// The per-user folder `real`, or the temporary folder without one. Tests get
+/// a throw-away folder instead, so they never touch the user's files.
+pub fn user_dir(real: Option<PathBuf>) -> PathBuf {
+    if cfg!(test) {
+        return std::env::temp_dir().join(format!("photo-airt-tests-{}", std::process::id()));
+    }
+    real.unwrap_or_else(std::env::temp_dir)
+}
+
 pub fn output_dir() -> PathBuf {
-    let base = dirs::picture_dir().or_else(dirs::home_dir).unwrap_or_else(std::env::temp_dir);
-    base.join("Photo-AIrt")
+    user_dir(dirs::picture_dir().or_else(dirs::home_dir)).join("Photo-AIrt")
 }
 
 pub fn cache_dir() -> PathBuf {
-    dirs::cache_dir().unwrap_or_else(std::env::temp_dir).join("photo-airt")
+    user_dir(dirs::cache_dir()).join("photo-airt")
 }
 
 pub fn slug(s: &str) -> String {
@@ -164,5 +172,108 @@ mod tests {
         assert_eq!(strip_verbatim(r"\\?\C:\dir\name."), None, "trailing dot");
         assert_eq!(strip_verbatim(&format!(r"\\?\C:\{}", "a".repeat(300))), None, "longer than MAX_PATH");
         assert_eq!(strip_verbatim(r"\\?\C:\console\confirm.txt").as_deref(), Some(r"C:\console\confirm.txt"));
+    }
+
+    fn tmp(name: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!("photo-airt-io-test-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    /// A JPEG whose EXIF block carries `orientation`.
+    fn jpeg_with_orientation(orientation: u8, w: u32, h: u32) -> Vec<u8> {
+        let mut jpeg = vec![];
+        image::RgbImage::from_pixel(w, h, image::Rgb([120, 90, 60]))
+            .write_to(&mut std::io::Cursor::new(&mut jpeg), image::ImageFormat::Jpeg)
+            .unwrap();
+        let mut exif = b"Exif\0\0II*\0\x08\0\0\0\x01\0\x12\x01\x03\0\x01\0\0\0".to_vec();
+        exif.extend([orientation, 0, 0, 0, 0, 0, 0, 0]);
+        let mut out = vec![0xFF, 0xD8, 0xFF, 0xE1];
+        out.extend(((exif.len() + 2) as u16).to_be_bytes());
+        out.extend(exif);
+        out.extend(&jpeg[2..]);
+        out
+    }
+
+    #[test]
+    fn photos_load_upright_following_their_exif_orientation() {
+        let dir = tmp("exif");
+        let path = dir.join("sideways.jpg");
+        std::fs::write(&path, jpeg_with_orientation(6, 8, 4)).unwrap();
+        let img = load_photo(&path).unwrap();
+        assert_eq!((img.width(), img.height()), (4, 8), "orientation 6 turns the picture a quarter");
+        std::fs::write(&path, jpeg_with_orientation(1, 8, 4)).unwrap();
+        let img = load_photo(&path).unwrap();
+        assert_eq!((img.width(), img.height()), (8, 4));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn the_format_comes_from_the_content_not_the_extension() {
+        let dir = tmp("content");
+        let path = dir.join("actually-a-png.jpg");
+        image::RgbImage::from_pixel(5, 3, image::Rgb([1, 2, 3])).save_with_format(&path, image::ImageFormat::Png).unwrap();
+        let img = load_photo(&path).unwrap();
+        assert_eq!((img.width(), img.height(), img.get_pixel(0, 0).0), (5, 3, [1, 2, 3]));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn files_that_are_not_images_never_reach_a_converter() {
+        let dir = tmp("junk");
+        let path = dir.join("notes.jpg");
+        std::fs::write(&path, b"#!/bin/sh\nthis is not a photo\n").unwrap();
+        let err = format!("{:#}", load_photo(&path).unwrap_err());
+        assert!(err.contains("not a recognised image format"), "{err}");
+        assert!(load_photo(&dir.join("missing.png")).is_err());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn oversized_images_are_refused_by_the_native_decoder() {
+        let dir = tmp("bomb");
+        let path = dir.join("wide.png");
+        image::GrayImage::new(30_001, 1).save(&path).unwrap();
+        let err = format!("{:#}", decode_native(&path).unwrap_err());
+        assert!(err.to_lowercase().contains("limit"), "{err}");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn slugs_are_lowercase_ascii_and_bounded() {
+        assert_eq!(slug("My Photo — Oil Painting!"), "my-photo-oil-painting");
+        assert_eq!(slug("--a  b--"), "a-b");
+        assert_eq!(slug(&"x".repeat(100)).len(), 60);
+    }
+
+    #[test]
+    fn saving_never_replaces_an_earlier_export() {
+        let dir = tmp("unique").join("created-on-demand");
+        let img = image::RgbImage::from_pixel(2, 2, image::Rgb([9, 9, 9]));
+        let a = save_unique(&img, &dir, "My Art").unwrap();
+        let b = save_unique(&img, &dir, "My Art").unwrap();
+        let c = save_unique(&img, &dir, "My Art").unwrap();
+        let name = |p: &Path| p.file_name().unwrap().to_string_lossy().to_string();
+        assert_eq!((name(&a), name(&b), name(&c)), ("my-art.png".into(), "my-art-2.png".into(), "my-art-3.png".into()));
+        assert_eq!(name(&unique_path(&dir, "", "gif").unwrap()), "artwork.gif");
+        let _ = std::fs::remove_dir_all(dir.parent().unwrap());
+    }
+
+    #[test]
+    fn canonicalize_resolves_real_paths_and_reports_missing_ones() {
+        let dir = tmp("canon");
+        std::fs::write(dir.join("a.txt"), "x").unwrap();
+        let resolved = canonicalize(&dir.join(".").join("a.txt")).unwrap();
+        assert!(resolved.is_absolute() && resolved.ends_with("a.txt"));
+        assert!(!resolved.to_string_lossy().starts_with(r"\\?\"));
+        assert!(canonicalize(&dir.join("missing")).is_err());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn tests_stay_out_of_the_users_folders() {
+        let sandbox = std::env::temp_dir().join(format!("photo-airt-tests-{}", std::process::id()));
+        assert!(output_dir().starts_with(&sandbox) && cache_dir().starts_with(&sandbox));
     }
 }

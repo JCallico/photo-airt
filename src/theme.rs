@@ -192,3 +192,24 @@ pub fn engine_color(e: crate::ai::Engine) -> Color32 {
         crate::ai::Engine::Duet => DUET,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn colours_blend_from_one_end_to_the_other() {
+        let (a, b) = (Color32::from_rgb(0, 0, 0), Color32::from_rgb(200, 100, 50));
+        assert_eq!(lerp_color(a, b, 0.0), a);
+        assert_eq!(lerp_color(a, b, 1.0), b);
+        assert_eq!(lerp_color(a, b, 0.5).r(), 100);
+    }
+
+    #[test]
+    fn each_engine_has_its_colour() {
+        use crate::ai::Engine;
+        assert_eq!(engine_color(Engine::Claude), CLAUDE);
+        assert_eq!(engine_color(Engine::Codex), CODEX);
+        assert_eq!(engine_color(Engine::Duet), DUET);
+    }
+}

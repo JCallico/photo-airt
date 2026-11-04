@@ -225,4 +225,48 @@ mod tests {
         let oil = reg.get("oil").unwrap();
         assert_eq!(oil.render(&src, &Params::defaults(oil.description()), &ctx).err(), Some(RenderError::Cancelled));
     }
+
+    #[test]
+    fn the_prompt_catalogue_lists_every_style_with_its_settings() {
+        let reg = Registry::builtin();
+        let text = reg.catalogue_for_prompt();
+        for p in reg.all() {
+            assert!(text.contains(&format!("- \"{}\" ({})", p.id(), p.description().name)), "{}", p.id());
+            for s in &p.description().settings {
+                assert!(text.contains(&s.key), "{}: {}", p.id(), s.key);
+            }
+        }
+    }
+
+    #[test]
+    fn catalogue_entries_show_each_kind_of_setting() {
+        let desc: Description = serde_json::from_str(
+            r#"{"id": "d", "name": "D", "blurb": "B", "settings": [
+                {"key": "n", "label": "Num", "type": "number", "min": 0, "max": 2, "default": 1},
+                {"key": "t", "label": "Tog", "type": "toggle", "default": true},
+                {"key": "c", "label": "Cho", "type": "choice", "default": "a", "options": [{"value": "a", "label": "A"}, {"value": "b", "label": "B"}]}
+            ]}"#,
+        )
+        .unwrap();
+        let entry = catalogue_entry(&desc);
+        assert!(entry.starts_with("- \"d\" (D): B\n"), "{entry}");
+        assert!(entry.contains("n [0..2, default 1] = Num"), "{entry}");
+        assert!(entry.contains("t [true|false, default true] = Tog"), "{entry}");
+        assert!(entry.contains(r#"c [one of "a"|"b", default "a"] = Cho"#), "{entry}");
+    }
+
+    #[test]
+    fn render_errors_read_as_their_message() {
+        assert_eq!(RenderError::Cancelled.to_string(), "cancelled");
+        assert_eq!(RenderError::Failed("out of ink".into()).to_string(), "out of ink");
+    }
+
+    #[test]
+    fn the_registry_finds_styles_by_id() {
+        let reg = Registry::builtin();
+        assert_eq!(reg.get("halftone").unwrap().id(), "halftone");
+        assert!(reg.get("nope").is_none());
+        assert_eq!(Registry::builtin_ids().len(), reg.all().len());
+        assert!(reg.get("oil").unwrap().folder().is_none(), "built-ins have no folder");
+    }
 }

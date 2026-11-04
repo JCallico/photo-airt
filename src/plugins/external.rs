@@ -125,7 +125,7 @@ pub struct Trust {
 
 impl Trust {
     fn path() -> PathBuf {
-        dirs::config_dir().unwrap_or_else(std::env::temp_dir).join("photo-airt").join("plugin-trust.json")
+        photo_io::user_dir(dirs::config_dir()).join("photo-airt").join("plugin-trust.json")
     }
 
     pub fn load() -> Self {
@@ -791,5 +791,152 @@ mod tests {
         let ctx = Ctx::for_image(&img, 1);
         ctx.cancel.store(true, Ordering::Relaxed);
         assert_eq!(plugin.render(&img, &params, &ctx).err(), Some(RenderError::Cancelled));
+    }
+
+    #[test]
+    fn location_kinds_have_labels_and_counts_of_pending_approvals_add_up() {
+        assert_eq!(LocationKind::Env.label(), "PHOTO_AIRT_PLUGINS");
+        assert_eq!(LocationKind::User.label(), "Your plug-ins folder");
+        assert_eq!(LocationKind::Portable.label(), "Next to the app");
+
+        let root = tmp("pending");
+        for name in ["a", "b"] {
+            std::fs::create_dir_all(root.join(name)).unwrap();
+            std::fs::write(root.join(name).join("plugin.toml"), NEVER_RUNS.replace("\"p\"", &format!("\"{name}\""))).unwrap();
+        }
+        let locations = vec![Location { kind: LocationKind::User, path: root.clone(), exists: true }];
+        let scan = scan_locations(locations.clone(), &[], &Trust::default());
+        assert_eq!(scan.needing_approval(), 2);
+
+        // Approving one leaves one; changing it afterwards asks again.
+        let mut trust = Trust::default();
+        trust.approve(&scan.found[0].dir, scan.found[0].checksum.as_deref().unwrap());
+        assert_eq!(scan_locations(locations.clone(), &[], &trust).needing_approval(), 1);
+        std::fs::write(root.join("a").join("extra.txt"), "changed").unwrap();
+        let again = scan_locations(locations, &[], &trust);
+        assert_eq!(again.found[0].status, Status::Changed);
+        assert_eq!(again.needing_approval(), 2);
+    }
+
+    #[test]
+    fn the_user_and_portable_locations_are_always_listed() {
+        let kinds: Vec<LocationKind> = locations().iter().map(|l| l.kind).collect();
+        assert!(kinds.contains(&LocationKind::User) && kinds.contains(&LocationKind::Portable));
+        assert!(portable_folder().unwrap().ends_with("plugins"));
+    }
+
+    #[test]
+    fn a_missing_location_is_skipped() {
+        let root = tmp("missing-location").join("nowhere");
+        let scan = scan_locations(vec![Location { kind: LocationKind::Env, path: root, exists: false }], &[], &Trust::default());
+        assert!(scan.found.is_empty());
+        assert_eq!(scan.needing_approval(), 0);
+    }
+
+    #[test]
+    fn approvals_survive_being_saved_and_loaded() {
+        let (dir, sum) = (Path::new("/plugins/roundtrip"), "abc123");
+        let mut trust = Trust::load();
+        trust.approve(dir, sum);
+        trust.save().unwrap();
+        let loaded = Trust::load();
+        assert_eq!(loaded.verdict(dir, sum), Some(true));
+        let mut revoked = loaded;
+        revoked.revoke(dir);
+        assert_eq!(revoked.verdict(dir, sum), None);
+    }
+
+    /// A plug-in folder holding one shell script, for the ways a process can misbehave.
+    #[cfg(unix)]
+    fn script_plugin(name: &str, extra_manifest: &str, script: &str) -> ProcessPlugin {
+        let dir = tmp(name);
+        let toml = format!("protocol = 1\nid = \"s\"\nname = \"S\"\nrun = [\"sh\", \"run.sh\"]\n{extra_manifest}");
+        std::fs::write(dir.join("plugin.toml"), &toml).unwrap();
+        std::fs::write(dir.join("run.sh"), script).unwrap();
+        ProcessPlugin::new(dir, Manifest::parse(&toml).unwrap())
+    }
+
+    /// The `output` path of the request in `$2`.
+    #[cfg(unix)]
+    const OUTPUT: &str = r#"out=$(sed -n 's/.*"output": "\(.*\)",$/\1/p' "$2")"#;
+    #[cfg(unix)]
+    const INPUT: &str = r#"in=$(sed -n 's/.*"input": "\(.*\)",$/\1/p' "$2")"#;
+
+    #[cfg(unix)]
+    fn render(plugin: &ProcessPlugin) -> (Result<Img, RenderError>, Ctx) {
+        let img = test_image(16, 12);
+        let ctx = Ctx::for_image(&img, 1);
+        (plugin.render(&img, &Params::default(), &ctx), ctx)
+    }
+
+    #[cfg(unix)]
+    fn failure(plugin: &ProcessPlugin) -> String {
+        match render(plugin).0 {
+            Err(RenderError::Failed(e)) => e,
+            Err(RenderError::Cancelled) => panic!("cancelled"),
+            Ok(_) => panic!("should have failed"),
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_crashing_plugin_reports_its_exit_status_and_stderr() {
+        let e = failure(&script_plugin("crash", "", "echo boom >&2\nexit 3\n"));
+        assert!(e.contains("exited with") && e.contains("boom"), "{e}");
+        let e = failure(&script_plugin("silent-crash", "", "exit 3\n"));
+        assert!(e.contains("exited with") && !e.contains(": :"), "{e}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_plugin_can_report_its_own_error() {
+        let e = failure(&script_plugin("reported", "", "echo '{\"error\": \"bad photo\"}'\nexit 1\n"));
+        assert_eq!(e, "bad photo");
+        let e = failure(&script_plugin("reported-ok", "", "echo '{\"error\": \"bad photo\"}'\nexit 0\n"));
+        assert_eq!(e, "bad photo", "even if it then exits cleanly");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_plugin_must_write_a_valid_image_of_the_right_size() {
+        assert!(failure(&script_plugin("no-output", "", "exit 0\n")).contains("did not write a valid PNG"));
+        let junk = format!("{OUTPUT}\necho junk > \"$out\"\n");
+        assert!(failure(&script_plugin("junk-output", "", &junk)).contains("did not write a valid PNG"));
+
+        let plugin = script_plugin("wrong-size", "", &format!("{OUTPUT}\ncp small.png \"$out\"\n"));
+        image::RgbImage::new(4, 4).save(plugin.dir.join("small.png")).unwrap();
+        assert!(failure(&plugin).contains("returned a 4×4 image for a 16×12 input"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_plugin_that_runs_too_long_is_stopped() {
+        let plugin = script_plugin("slow", "timeout_seconds = 1\n", "exec sleep 20\n");
+        let started = Instant::now();
+        assert!(failure(&plugin).contains("timed out after 1 s"));
+        assert!(started.elapsed() < Duration::from_secs(10));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn progress_is_relayed_and_other_output_ignored() {
+        let script = format!("{INPUT}\n{OUTPUT}\necho 'plain text'\necho '{{\"progress\": 0.5}}'\ncp \"$in\" \"$out\"\n");
+        let (result, ctx) = render(&script_plugin("progress", "", &script));
+        assert_eq!(result.unwrap().w, 16);
+        assert_eq!(ctx.progress_value(), 0.5);
+    }
+
+    #[test]
+    fn folder_checksums_change_with_content_and_ignore_nothing() {
+        let dir = tmp("checksum");
+        std::fs::write(dir.join("a.txt"), "one").unwrap();
+        let first = folder_checksum(&dir).unwrap();
+        assert_eq!(folder_checksum(&dir).unwrap(), first, "stable");
+        std::fs::write(dir.join("a.txt"), "two").unwrap();
+        let second = folder_checksum(&dir).unwrap();
+        assert_ne!(first, second);
+        std::fs::create_dir_all(dir.join("sub")).unwrap();
+        std::fs::write(dir.join("sub").join("b.txt"), "x").unwrap();
+        assert_ne!(folder_checksum(&dir).unwrap(), second, "subfolders count");
     }
 }

@@ -770,3 +770,204 @@ pub fn xdog_fill(l: &[f32], w: usize, h: usize, sigma: f32, p: f32, eps: f32, ph
         })
         .collect()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn close(a: f32, b: f32) -> bool {
+        (a - b).abs() < 1e-3
+    }
+
+    fn ramp(w: usize, h: usize) -> Img {
+        Img::new(w, h, [0.0; 3]).map_xy(|x, y, _| [x as f32 / w as f32, y as f32 / h as f32, 0.5])
+    }
+
+    /// Dark on the left half, bright on the right.
+    fn vertical_edge(w: usize, h: usize) -> Img {
+        Img::new(w, h, [0.0; 3]).map_xy(|x, _, _| if x < w / 2 { [0.1; 3] } else { [0.9; 3] })
+    }
+
+    #[test]
+    fn converting_to_bytes_rounds_and_clamps() {
+        let img = Img { w: 2, h: 1, px: vec![[0.5, -1.0, 2.0], [0.0, 1.0, 0.25]] };
+        assert_eq!(img.to_rgb8().as_raw(), &[128, 0, 255, 0, 255, 64]);
+        assert_eq!(img.to_rgba8_bytes(), [128, 0, 255, 255, 0, 255, 64, 255]);
+        let back = Img::from_rgb8(&img.to_rgb8());
+        assert!(close(back.at(1, 0)[1], 1.0));
+    }
+
+    #[test]
+    fn pixel_access_clamps_at_the_edges_and_samples_between_pixels() {
+        let img = Img { w: 2, h: 2, px: vec![[0.0; 3], [1.0; 3], [0.0; 3], [1.0; 3]] };
+        assert_eq!(img.get(-5, -5), [0.0; 3]);
+        assert_eq!(img.get(9, 9), [1.0; 3]);
+        assert!(close(img.sample(0.5, 0.5)[0], 0.5));
+        assert_eq!(img.sample(100.0, -100.0), [1.0; 3]);
+    }
+
+    #[test]
+    fn fitting_only_ever_shrinks_and_keeps_the_aspect() {
+        let img = ramp(40, 20);
+        assert_eq!(img.long_side(), 40);
+        let same = img.fit_long(100);
+        assert_eq!((same.w, same.h), (40, 20));
+        let small = img.fit_long(10);
+        assert_eq!((small.w, small.h), (10, 5));
+        let exact = img.resize_exact(7, 9, FilterType::Triangle);
+        assert_eq!((exact.w, exact.h, exact.px.len()), (7, 9, 63));
+    }
+
+    #[test]
+    fn colour_helpers() {
+        assert!(close(luma([1.0; 3]), 1.0));
+        assert_eq!(luma([0.0; 3]), 0.0);
+        assert_eq!(mix([0.0; 3], [1.0; 3], 0.25), [0.25; 3]);
+        assert_eq!(mul([0.5; 3], [0.5, 1.0, 0.0]), [0.25, 0.5, 0.0]);
+        assert_eq!(scale([0.5; 3], 2.0), [1.0; 3]);
+        assert_eq!(add([0.25; 3], [0.5; 3]), [0.75; 3]);
+        assert_eq!(clamp01([-1.0, 0.5, 2.0]), [0.0, 0.5, 1.0]);
+        assert_eq!(dist2([0.0; 3], [1.0, 2.0, 0.0]), 5.0);
+        assert_eq!((smoothstep(0.0, 1.0, -1.0), smoothstep(0.0, 1.0, 2.0)), (0.0, 1.0));
+        assert!(close(smoothstep(0.0, 1.0, 0.5), 0.5));
+        let grey = saturate([0.8, 0.2, 0.4], 0.0);
+        assert!(close(grey[0], grey[1]) && close(grey[1], grey[2]));
+        let h = hex(0xFF8000);
+        assert!(close(h[0], 1.0) && close(h[1], 128.0 / 255.0) && h[2] == 0.0);
+    }
+
+    #[test]
+    fn hsv_round_trips_every_hue() {
+        assert_eq!(rgb_to_hsv([1.0, 0.0, 0.0]), [0.0, 1.0, 1.0]);
+        assert!(close(rgb_to_hsv([0.0, 1.0, 0.0])[0], 1.0 / 3.0));
+        assert!(close(rgb_to_hsv([0.0, 0.0, 1.0])[0], 2.0 / 3.0));
+        assert_eq!(rgb_to_hsv([0.5; 3]), [0.0, 0.0, 0.5]);
+        assert_eq!(rgb_to_hsv([0.0; 3]), [0.0; 3]);
+        for c in [[0.9, 0.2, 0.1], [0.9, 0.8, 0.1], [0.1, 0.9, 0.2], [0.1, 0.8, 0.9], [0.1, 0.2, 0.9], [0.9, 0.1, 0.8]] {
+            let back = hsv_to_rgb(rgb_to_hsv(c));
+            assert!((0..3).all(|i| close(back[i], c[i])), "{c:?} became {back:?}");
+        }
+    }
+
+    #[test]
+    fn blurring_preserves_flat_areas_and_spreads_detail() {
+        let flat = Img::new(16, 16, [0.4, 0.5, 0.6]);
+        assert!(blur_img(&flat, 3.0).px.iter().all(|c| close(c[0], 0.4) && close(c[2], 0.6)));
+
+        let mut spot = vec![0.0f32; 21 * 21];
+        spot[10 * 21 + 10] = 1.0;
+        let blurred = blur(&spot, 21, 21, 2.0);
+        assert!(blurred[10 * 21 + 10] < 1.0 && blurred[10 * 21 + 12] > 0.0);
+        assert!(close(blurred.iter().sum::<f32>(), 1.0), "energy is preserved");
+    }
+
+    #[test]
+    fn flow_follows_edges() {
+        let img = vertical_edge(32, 32);
+        let flow = flow_field(&img, 2.0);
+        let [dx, dy] = flow_at(&flow, 32, 32, 16.0, 16.0);
+        assert!(dy.abs() > 0.9 && dx.abs() < 0.3, "the tangent runs along the edge: {dx}, {dy}");
+
+        // Smearing along the flow keeps a vertical edge sharp.
+        let l = img.luma();
+        let smeared = lic(&l, &flow, 32, 32, 6.0);
+        assert!(close(smeared[16 * 32 + 2], l[16 * 32 + 2]) && close(smeared[16 * 32 + 29], l[16 * 32 + 29]));
+    }
+
+    #[test]
+    fn gradients_mark_edges_only() {
+        let img = vertical_edge(16, 16);
+        let g = gradient_mag(&img.luma(), 16, 16);
+        assert!(g[8 * 16 + 8] > 0.1);
+        assert!(g[8 * 16 + 2] < 1e-4);
+    }
+
+    #[test]
+    fn distance_is_measured_from_the_mask() {
+        let (w, h) = (7, 7);
+        let mut mask = vec![false; w * h];
+        mask[3 * w + 3] = true;
+        let d = distance_transform(&mask, w, h);
+        assert_eq!(d[3 * w + 3], 0.0);
+        assert_eq!(d[3 * w + 4], 1.0);
+        assert_eq!(d[3 * w], 3.0);
+        assert!(close(d[2 * w + 2], std::f32::consts::SQRT_2));
+    }
+
+    #[test]
+    fn relief_leaves_flat_height_fields_flat_and_lights_slopes() {
+        let img = Img::new(16, 16, [0.5; 3]);
+        let flat = vec![0.5f32; 16 * 16];
+        assert!(apply_relief(&img, &flat, 0.0).px == img.px, "no strength, no change");
+        let lit = apply_relief(&img, &flat, 1.0);
+        let first = lit.at(8, 8);
+        assert!(lit.px.iter().all(|c| close(c[0], first[0])), "a flat surface is lit evenly");
+
+        let slope: Vec<f32> = (0..16 * 16).map(|i| if i % 16 < 8 { 0.0 } else { 1.0 }).collect();
+        let shaded = apply_relief(&img, &slope, 1.0);
+        assert!(!close(shaded.at(8, 8)[0], first[0]), "a step catches the light");
+    }
+
+    #[test]
+    fn noise_is_bounded_and_repeatable() {
+        for i in 0..200 {
+            let (x, y) = (i as f32 * 0.37, i as f32 * 0.11);
+            let (n, f) = (value_noise(x, y, 5), fbm(x, y, 4, 5));
+            assert!((0.0..=1.0).contains(&n) && (-0.001..=1.001).contains(&f), "{n} {f}");
+            assert_eq!(n, value_noise(x, y, 5));
+        }
+        assert_eq!(hash2(3, 4, 5), hash2(3, 4, 5));
+        assert_ne!(hash2(3, 4, 5), hash2(3, 4, 6));
+        let streaks = streak_noise(16, 8, 4.0, 1);
+        assert_eq!(streaks.len(), 16 * 8);
+        assert_eq!(streaks, streak_noise(16, 8, 4.0, 1));
+    }
+
+    #[test]
+    fn the_rng_is_deterministic_and_stays_in_range() {
+        let (mut a, mut b) = (Rng::new(9), Rng::new(9));
+        for _ in 0..500 {
+            let v = a.f32();
+            assert!((0.0..1.0).contains(&v));
+            assert_eq!(v, b.f32());
+            assert!((2.0..4.0).contains(&a.range(2.0, 4.0)));
+            b.range(2.0, 4.0);
+            assert!(a.below(7) < 7);
+            b.below(7);
+        }
+        assert_ne!(Rng::new(1).next_u64(), Rng::new(2).next_u64());
+        let mut v: Vec<u32> = (0..50).collect();
+        a.shuffle(&mut v);
+        assert_ne!(v, (0..50).collect::<Vec<_>>());
+        v.sort();
+        assert_eq!(v, (0..50).collect::<Vec<_>>(), "a shuffle keeps every item");
+    }
+
+    #[test]
+    fn discs_paint_inside_their_radius_and_survive_the_edges() {
+        let mut img = Img::new(16, 16, [0.0; 3]);
+        stamp_disc(&mut img, 8.0, 8.0, 3.0, [1.0; 3], 1.0);
+        assert_eq!(img.at(8, 8), [1.0; 3]);
+        assert_eq!(img.at(14, 8), [0.0; 3]);
+        stamp_disc(&mut img, 0.0, 0.0, 5.0, [1.0; 3], 0.5);
+        assert!(close(img.at(0, 0)[0], 0.5));
+        stamp_disc(&mut img, 40.0, 40.0, 2.0, [1.0; 3], 1.0);
+    }
+
+    #[test]
+    fn filters_handle_cancellation_and_shape() {
+        let img = ramp(32, 24);
+        let flow = flow_field(&img, 2.0);
+        let ctx = Ctx::for_image(&img, 1);
+        let out = akf(&img, &flow, 3.0, 8.0, 1.0, &ctx, 0.0, 1.0).unwrap();
+        assert_eq!((out.w, out.h), (32, 24));
+        ctx.cancel.store(true, Ordering::Relaxed);
+        assert!(akf(&img, &flow, 3.0, 8.0, 1.0, &ctx, 0.0, 1.0).is_none());
+
+        let l = vertical_edge(32, 24).luma();
+        let lines = xdog(&l, 32, 24, 1.0, 20.0, 0.8, 10.0);
+        assert_eq!(lines.len(), 32 * 24);
+        let filled = xdog_fill(&l, 32, 24, 1.0, 20.0, 0.8, 10.0, 0.3);
+        assert_eq!(filled.len(), 32 * 24);
+    }
+}

@@ -522,4 +522,87 @@ options = [{ value = "a", label = "A" }, { value = "b", label = "B" }]
         assert!(Manifest::parse("protocol = 1\nid = \"x\"\nname = \"X\"\nrun = []\n").is_err(), "run is required");
         assert!(Manifest::parse(&format!("protocol = 1\n{base}").replace("\"x\"\nname", "\"Bad Id\"\nname")).is_err());
     }
+
+    #[test]
+    fn settings_coerce_values_into_their_domain() {
+        let slider = Setting::number("s", "S", 1.0, 10.0, 5.0, 1.0);
+        assert_eq!(slider.coerce(&Value::Number(99.0)), Some(Value::Number(10.0)));
+        assert_eq!(slider.coerce(&Value::Number(2.6)), Some(Value::Number(3.0)), "integer sliders round");
+        assert_eq!(slider.coerce(&Value::Number(f32::NAN)), None);
+        assert_eq!(slider.coerce(&Value::Text("big".into())), None);
+        let fine = Setting::number("s", "S", 0.0, 1.0, 0.5, 0.1);
+        assert_eq!(fine.coerce(&Value::Number(0.25)), Some(Value::Number(0.25)), "fractional sliders do not round");
+
+        let toggle = Setting { kind: SettingKind::Toggle, default: Value::Bool(false), ..slider.clone() };
+        assert_eq!(toggle.coerce(&Value::Number(2.0)), Some(Value::Bool(true)));
+        assert_eq!(toggle.coerce(&Value::Number(0.0)), Some(Value::Bool(false)));
+    }
+
+    #[test]
+    fn params_read_toggles_as_numbers_and_numbers_as_toggles() {
+        let mut p = Params::default();
+        p.0.insert("on".into(), Value::Bool(true));
+        p.0.insert("n".into(), Value::Number(3.0));
+        p.0.insert("t".into(), Value::Text("ink".into()));
+        assert_eq!((p.get("on"), p.get("n")), (1.0, 3.0));
+        assert!(p.flag("on") && p.flag("n"));
+        assert_eq!(p.choice("t"), "ink");
+    }
+
+    #[test]
+    #[should_panic(expected = "unknown numeric param")]
+    fn reading_an_undeclared_setting_is_a_bug() {
+        Params::default().get("nope");
+    }
+
+    #[test]
+    fn the_render_context_scales_reports_and_records() {
+        let img = Img::new(800, 400, [0.0; 3]);
+        let ctx = Ctx::for_image(&img, 0x1_0000_0002);
+        assert_eq!(ctx.scale, 0.5);
+        assert_eq!(ctx.px(10.0), 5.0);
+        assert_eq!(ctx.px(0.01), 0.5, "sizes never collapse to nothing");
+        assert_eq!(ctx.seed32(), 3);
+        ctx.progress(0.5);
+        assert_eq!(ctx.progress_value(), 0.5);
+        ctx.progress(7.0);
+        assert_eq!(ctx.progress_value(), 1.0);
+        assert!(!ctx.cancelled());
+
+        assert!(!ctx.recording());
+        ctx.snapshot(&img); // Ignored while not recording.
+        let count = Arc::new(AtomicU32::new(0));
+        let seen = count.clone();
+        let recording = ctx.with_snapshots(Arc::new(move |_| {
+            seen.fetch_add(1, Ordering::Relaxed);
+        }));
+        assert!(recording.recording());
+        recording.snapshot(&img);
+        assert_eq!(count.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn manifests_load_from_a_folder_or_explain_why_not() {
+        let dir = std::env::temp_dir().join(format!("photo-airt-manifest-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        assert!(Manifest::load(&dir).unwrap_err().contains("cannot read plugin.toml"));
+        std::fs::write(dir.join(Manifest::FILE), "protocol = 1\nid = \"d\"\nname = \"D\"\nrun = [\"bin/d\"]\n").unwrap();
+        assert_eq!(Manifest::load(&dir).unwrap().id, "d");
+        std::fs::write(dir.join(Manifest::FILE), "this is not toml").unwrap();
+        assert!(Manifest::load(&dir).unwrap_err().contains("invalid plugin.toml"));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn embedded_manifests_become_descriptions() {
+        let d = Manifest::embedded("protocol = 1\nid = \"d\"\nname = \"D\"\nblurb = \"B\"\nrun = [\"bin/d\"]\n");
+        assert_eq!((d.id.as_str(), d.name.as_str(), d.blurb.as_str()), ("d", "D", "B"));
+    }
+
+    #[test]
+    #[should_panic(expected = "invalid plugin.toml")]
+    fn an_invalid_embedded_manifest_is_caught_by_the_styles_tests() {
+        Manifest::embedded("nonsense");
+    }
 }

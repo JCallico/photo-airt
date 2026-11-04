@@ -1405,3 +1405,379 @@ fn stack_tile(
     });
     inner.inner
 }
+
+#[cfg(test)]
+mod tests {
+    use egui::{Key, Modifiers};
+
+    use super::*;
+    use crate::ai::{CliStatus, Engine, JobStatus, ModelInfo};
+    use crate::app::test_support::*;
+
+    #[test]
+    fn elapsed_times_read_as_minutes_and_seconds() {
+        assert_eq!(fmt_elapsed(0), "0:00");
+        assert_eq!(fmt_elapsed(65), "1:05");
+        assert_eq!(fmt_elapsed(600), "10:00");
+    }
+
+    #[test]
+    fn covering_crops_the_longer_side_evenly() {
+        let wide = cover_uv([200, 100], 100.0, 100.0);
+        assert_eq!((wide.min.x, wide.max.x, wide.min.y, wide.max.y), (0.25, 0.75, 0.0, 1.0));
+        let tall = cover_uv([100, 200], 100.0, 100.0);
+        assert_eq!((tall.min.y, tall.max.y, tall.min.x, tall.max.x), (0.25, 0.75, 0.0, 1.0));
+    }
+
+    /// Every width the top bar adapts to, with a photo and its artwork.
+    #[test]
+    fn the_studio_draws_at_every_window_width() {
+        let mut s = studio();
+        s.with_draft("A photo with quite a long file name.png");
+        for width in [1600.0, 1300.0, 1150.0, 1000.0, 700.0, 500.0] {
+            s.size = [width, 800.0];
+            for view in [View::Split, View::SideBySide, View::Single, View::Gallery] {
+                s.app.view = view;
+                s.frame();
+                s.frame();
+            }
+        }
+    }
+
+    #[test]
+    fn the_top_bar_keeps_export_available_at_narrow_widths() {
+        let mut s = studio();
+        assert!(s.shows("Export") && s.shows("📂  Open"));
+        s.size = [1000.0, 800.0];
+        s.frame();
+        s.frame();
+        assert!(s.labels().contains(&"📂"), "narrow windows keep only the icon: {:?}", s.labels());
+        assert!(s.shows("Export"), "and always the main action");
+    }
+
+    #[test]
+    fn export_is_disabled_until_an_artwork_is_selected() {
+        let mut s = studio();
+        s.click("Export");
+        assert!(!s.app.exporting && s.toasts().is_empty(), "no toast either: the button did nothing");
+    }
+
+    #[test]
+    fn clicking_export_saves_the_artwork() {
+        let mut s = studio();
+        s.with_draft("clicked.png");
+        s.click("Export");
+
+        s.until("the save", |a| !a.exporting);
+        assert!(s.toasts().last().unwrap().starts_with("Saved "), "{:?}", s.toasts());
+        assert!(s.shows("Export"));
+    }
+
+    #[test]
+    fn the_bar_reports_cli_status_and_pending_plugins() {
+        let mut s = studio();
+        s.frame();
+        assert!(s.shows("Claude …") && s.shows("Codex …"), "still detecting: {:?}", s.labels());
+        s.app.claude = Some(CliStatus { found: true, version: "2.1".into(), ..Default::default() });
+        s.app.codex = Some(CliStatus::default());
+        s.frame();
+        assert!(s.shows("Claude 2.1") && s.shows("Codex not found"), "{:?}", s.labels());
+        assert!(s.labels().contains(&"Plug-ins"));
+    }
+
+    #[test]
+    fn the_bar_shows_where_the_photo_came_from() {
+        let mut s = studio();
+        s.with_photo("origin.png");
+        s.frame();
+        assert!(s.shows("Local file") && s.shows("origin.png") && s.shows("96 × 64"), "{:?}", s.labels());
+    }
+
+    #[test]
+    fn view_chips_and_number_keys_switch_the_view() {
+        let mut s = studio();
+        s.with_draft("p.png");
+        s.click("Gallery");
+        assert!(s.app.view == View::Gallery);
+        s.click("Single");
+        assert!(s.app.view == View::Single);
+        s.click("Side by side");
+        assert!(s.app.view == View::SideBySide);
+        s.click("Split");
+        assert!(s.app.view == View::Split);
+        for (key, view) in [(Key::Num2, View::SideBySide), (Key::Num3, View::Single), (Key::Num4, View::Gallery), (Key::Num1, View::Split)]
+        {
+            s.press(key, Modifiers::NONE);
+            assert!(s.app.view == view);
+        }
+    }
+
+    #[test]
+    fn keyboard_shortcuts_drive_the_studio() {
+        let mut s = studio();
+        s.with_photo("a.png");
+        let art = s.app.add_artwork("Art".into(), "".into(), Kind::Algorithm, crate::app::test_support::test_img(), false);
+
+        s.press(Key::A, Modifiers::NONE);
+        assert!(s.app.left_tab == LeftTab::AiStudio);
+        s.press(Key::A, Modifiers::NONE);
+        assert!(s.app.left_tab == LeftTab::Algorithms);
+
+        s.press(Key::ArrowRight, Modifiers::NONE);
+        assert_eq!(s.app.selected, Some(art));
+        s.press(Key::ArrowLeft, Modifiers::NONE);
+        assert_eq!(s.app.selected, None);
+
+        s.press(Key::K, Modifiers::NONE);
+        assert!(s.app.artworks[0].pinned);
+
+        let seed = s.app.seed;
+        s.press(Key::R, Modifiers::NONE);
+        assert_ne!(s.app.seed, seed);
+        s.app.render_due = None;
+    }
+
+    #[test]
+    fn save_shortcuts_tell_the_two_kinds_apart() {
+        let mut s = studio();
+        s.press(Key::S, Modifiers::COMMAND);
+        s.press(Key::S, Modifiers::COMMAND | Modifiers::SHIFT);
+        assert_eq!(s.toasts(), ["Select an artwork to export", "Select an artwork to export"]);
+        s.with_photo("p.png");
+        let art = s.app.add_artwork("AI".into(), "".into(), Kind::Ai(Engine::Codex), crate::app::test_support::test_img(), true);
+        s.app.selected = Some(art);
+        s.press(Key::S, Modifiers::COMMAND | Modifiers::SHIFT);
+        assert_eq!(s.toasts().last().unwrap(), &"Time-lapses are made from algorithm styles");
+        assert!(!s.app.exporting);
+        s.press(Key::S, Modifiers::COMMAND);
+        assert!(s.app.exporting);
+        s.until("the save", |a| !a.exporting);
+    }
+
+    #[test]
+    fn bracket_keys_step_through_photos_and_p_opens_the_overview() {
+        let mut s = studio();
+        let a = s.with_photo("a.png");
+        s.press(Key::P, Modifiers::NONE);
+        assert!(!s.app.overview.visible, "one photo needs no overview");
+        let b = s.with_photo("b.png");
+        s.press(Key::OpenBracket, Modifiers::NONE);
+        assert_eq!(s.app.current, Some(a));
+        s.press(Key::CloseBracket, Modifiers::NONE);
+        assert_eq!(s.app.current, Some(b));
+        s.press(Key::P, Modifiers::NONE);
+        assert!(s.app.overview.visible);
+    }
+
+    #[test]
+    fn shortcuts_keep_out_of_the_way_of_the_open_sheet() {
+        let mut s = studio();
+        s.app.open_sheet.visible = true;
+        s.frame();
+        s.press(Key::A, Modifiers::NONE);
+        assert!(s.app.left_tab == LeftTab::Algorithms);
+    }
+
+    #[test]
+    fn pasting_a_path_and_dropping_files_open_photos() {
+        let mut s = studio();
+        let asset = photo_asset("pasted.png");
+        s.frame_with(vec![egui::Event::Paste(asset.local.display().to_string())], Modifiers::NONE, vec![]);
+        assert!(s.app.loading.is_some());
+        s.until("the pasted photo", |a| a.photo.is_some() && a.loading.is_none());
+        assert_eq!(s.app.photo.as_ref().unwrap().name, "pasted.png");
+
+        let dropped = photo_asset("dropped.png");
+        let file = std::sync::Arc::new(crate::app::test_support::DroppedPath(dropped.local.clone()));
+        s.frame_with(vec![], Modifiers::NONE, vec![file]);
+        s.until("the dropped photo", |a| a.loading.is_none() && a.photo.as_ref().is_some_and(|p| p.name == "dropped.png"));
+    }
+
+    #[test]
+    fn hovering_files_over_the_window_invites_the_drop() {
+        let mut s = studio();
+        s.frame();
+        let raw = egui::RawInput {
+            hovered_files: vec![egui::HoveredFile::default()],
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, s.size.into())),
+            ..Default::default()
+        };
+        let ctx = s.app.ctx.clone();
+        let app = &mut s.app;
+        let out = ctx.run_ui(raw, |ui| app.draw(ui));
+        fn invites_drop(shape: &egui::Shape) -> bool {
+            match shape {
+                egui::Shape::Text(text) => text.galley.text() == "Drop to open your photo",
+                egui::Shape::Vec(shapes) => shapes.iter().any(invites_drop),
+                _ => false,
+            }
+        }
+        assert!(out.shapes.iter().any(|clipped| invites_drop(&clipped.shape)));
+        s.frame();
+        assert!(!s.shows("Drop to open your photo"));
+    }
+
+    #[test]
+    fn the_left_panel_tabs_switch_on_click() {
+        let mut s = studio();
+        s.with_photo("p.png");
+        s.click("✨  AI Studio");
+        assert!(s.app.left_tab == LeftTab::AiStudio);
+        s.click("🎨  Algorithms");
+        assert!(s.app.left_tab == LeftTab::Algorithms);
+    }
+
+    #[test]
+    fn the_gallery_lists_every_style_and_choosing_one_selects_it() {
+        let mut s = studio();
+        s.with_photo("p.png");
+        s.frame();
+        let registry = plugins::registry();
+        let name = registry.get("brush").unwrap().description().name.clone();
+        assert!(s.shows(&name), "{:?}", s.labels());
+        assert!(s.app.render_due.is_none());
+        s.click(&name);
+        assert_eq!(s.app.style_id, "brush");
+    }
+
+    #[test]
+    fn the_ai_studio_explains_missing_clis_and_lists_models() {
+        let mut s = studio();
+        s.with_photo("p.png");
+        s.app.left_tab = LeftTab::AiStudio;
+        s.frame();
+        let no_cli = s.labels().join(" | ");
+        s.app.claude = Some(CliStatus::default());
+        s.app.codex = Some(CliStatus::default());
+        s.frame();
+        assert_ne!(no_cli, s.labels().join(" | "), "detection changes what the studio says");
+
+        let model = |id: &str| ModelInfo { id: id.into(), label: id.into(), description: "d".into() };
+        let claude = CliStatus {
+            found: true,
+            version: "1".into(),
+            image_gen: false,
+            models: vec![model("opus"), model("sonnet")],
+            default_model: Some("opus".into()),
+        };
+        let codex = CliStatus { found: true, version: "2".into(), image_gen: true, models: vec![model("gpt-x")], default_model: None };
+        s.app.prefs.unavailable.insert("claude:sonnet".into(), "needs credits".into());
+        s.app.director_role = s.app.prefs.resolve(ai::Role::Director, Some(&claude), Some(&codex));
+        s.app.painter_role = s.app.prefs.resolve(ai::Role::Painter, Some(&claude), Some(&codex));
+        s.app.claude = Some(claude);
+        s.app.codex = Some(codex);
+        s.frame();
+        s.frame();
+        assert!(s.shows("Art Director") && s.shows("Master Painter"), "{:?}", s.labels());
+    }
+
+    #[test]
+    fn the_ai_studio_shows_an_art_direction_and_applies_its_recipes() {
+        let mut s = studio();
+        s.with_photo("p.png");
+        s.app.left_tab = LeftTab::AiStudio;
+        s.app.director =
+            Some(crate::app::Director { report: report("Golden hour", &[("Moody", "pixel")]), thumbs: vec![None], generation: 0 });
+        s.frame();
+        s.frame();
+        assert!(s.shows("Golden hour") && s.shows("Moody"), "{:?}", s.labels());
+        s.click("Apply recipe");
+        assert_eq!(s.app.style_id, "pixel");
+        assert_eq!(s.app.recipe_title.as_deref(), Some("Moody"));
+    }
+
+    #[test]
+    fn jobs_show_their_state_and_can_be_cancelled_or_cleared() {
+        let mut s = studio();
+        s.with_photo("p.png");
+        s.app.left_tab = LeftTab::AiStudio;
+        s.size = [1600.0, 2600.0];
+        s.app.jobs = vec![
+            ai::Job::for_test(1, "Running job", Engine::Claude, JobStatus::Running),
+            ai::Job::for_test(2, "Finished job", Engine::Codex, JobStatus::Done),
+            ai::Job::for_test(3, "Broken job", Engine::Duet, JobStatus::Failed("it broke".into())),
+            ai::Job::for_test(4, "Stopped job", Engine::Claude, JobStatus::Cancelled),
+        ];
+        s.frame();
+        s.frame();
+        for text in ["Running job", "Finished job", "Broken job", "it broke", "failed", "cancelled", "done · 0:00"] {
+            assert!(s.shows(text), "no “{text}” in {:?}", s.labels());
+        }
+        s.click("Cancel");
+        assert!(s.app.jobs.iter().find(|j| j.id == 1).unwrap().cancelled_for_test());
+        s.click("Clear finished");
+        let left: Vec<u64> = s.app.jobs.iter().map(|j| j.id).collect();
+        assert_eq!(left, [1], "only the running job stays");
+    }
+
+    #[test]
+    fn the_atelier_rerolls_and_restores_defaults() {
+        let mut s = studio();
+        s.with_draft("p.png");
+        s.frame();
+        let seed = s.app.seed;
+        s.click("🎲  Reroll");
+        assert_ne!(s.app.seed, seed);
+        s.app.render_due = None;
+
+        let key = plugins::registry().get(&s.app.style_id).unwrap().description().settings[0].key.clone();
+        let style = s.app.style_id.clone();
+        s.app.params_for(&style).0.insert(key.clone(), plugins::Value::Number(1234.0));
+        s.click("↺  Defaults");
+        assert_ne!(s.app.params[&style].0[&key], plugins::Value::Number(1234.0));
+    }
+
+    #[test]
+    fn the_atelier_draws_every_kind_of_setting() {
+        let mut s = studio();
+        s.with_photo("p.png");
+        for plugin in plugins::registry().all() {
+            s.app.style_id = plugin.id().to_string();
+            s.frame();
+            s.frame();
+            let first = &plugin.description().settings[0].label;
+            assert!(s.shows(first), "{}: no “{first}” in {:?}", plugin.id(), s.labels());
+        }
+    }
+
+    #[test]
+    fn keeping_the_draft_pins_it() {
+        let mut s = studio();
+        let id = s.with_draft("p.png");
+        s.frame();
+        s.click("📌  Keep in collection");
+        assert!(s.app.artworks.iter().find(|a| a.id == id).unwrap().pinned);
+    }
+
+    #[test]
+    fn an_ai_artwork_shows_its_details_and_leads_back_to_the_algorithms() {
+        let mut s = studio();
+        s.with_photo("p.png");
+        let id = s.app.add_artwork("Painted".into(), "Codex".into(), Kind::Ai(Engine::Codex), test_img(), true);
+        s.app.artworks[0].prompt = Some("the prompt it was given".into());
+        s.app.artworks[0].saved = Some("/tmp/kept.png".into());
+        s.app.selected = Some(id);
+        s.frame();
+        s.frame();
+        assert!(s.shows("the prompt it was given"), "{:?}", s.labels());
+        s.click("🎨  Back to algorithms");
+        assert_ne!(s.app.selected, Some(id));
+    }
+
+    #[test]
+    fn the_collection_shows_each_artwork_and_photo_stack() {
+        let mut s = studio();
+        s.with_photo("first.png");
+        s.with_photo("second.png");
+        s.app.add_artwork("Kept".into(), "".into(), Kind::Algorithm, test_img(), true);
+        s.app.add_artwork("AI".into(), "".into(), Kind::Ai(Engine::Claude), test_img(), true);
+        s.app.add_artwork("Duet".into(), "".into(), Kind::Ai(Engine::Duet), test_img(), true);
+        s.frame();
+        s.frame();
+        assert!(s.shows("Kept"), "{:?}", s.labels());
+        // The "All photos" contact sheet comes up from the bar's shortcut too.
+        s.app.film_focus = true;
+        s.frame();
+        assert!(!s.app.film_focus, "the bar scrolled to the photo on stage");
+    }
+}
