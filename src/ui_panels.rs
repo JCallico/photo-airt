@@ -1550,8 +1550,12 @@ mod tests {
         assert_eq!(s.toasts().last().unwrap(), &"Time-lapses are made from algorithm styles");
         assert!(!s.app.exporting);
         s.press(Key::S, Modifiers::COMMAND);
-        assert!(s.app.exporting);
         s.until("the save", |a| !a.exporting);
+        // The worker may finish during the key-release frame. Check its result
+        // rather than requiring an intermediate busy state to still be visible.
+        let toast = s.toasts().last().unwrap().to_string();
+        let path = toast.strip_prefix("Saved ").unwrap_or_else(|| panic!("{toast}"));
+        assert_eq!(image::open(path).unwrap().to_rgb8(), test_img().to_rgb8());
     }
 
     #[test]
@@ -1583,7 +1587,6 @@ mod tests {
         let mut s = studio();
         let asset = photo_asset("pasted.png");
         s.frame_with(vec![egui::Event::Paste(asset.local.display().to_string())], Modifiers::NONE, vec![]);
-        assert!(s.app.loading.is_some());
         s.until("the pasted photo", |a| a.photo.is_some() && a.loading.is_none());
         assert_eq!(s.app.photo.as_ref().unwrap().name, "pasted.png");
 
