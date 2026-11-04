@@ -448,3 +448,288 @@ impl App {
         Some(tex)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ai::{Engine, Placard};
+    use crate::app::test_support::*;
+
+    fn img() -> Img {
+        Img::new(8, 8, [0.5; 3])
+    }
+
+    #[test]
+    fn opening_a_file_brings_it_on_stage_and_into_recents() {
+        let mut s = studio();
+        let asset = photo_asset("beach.png");
+        s.app.open_sheet.visible = true;
+        s.app.open(vec![OpenRequest::Input(Input::File(asset.local.clone()))]);
+        assert!(!s.app.open_sheet.visible, "the sheet closes");
+        assert_eq!(s.app.loading.as_ref().unwrap().label, "beach.png");
+        s.until("the photo", |a| a.photo.is_some() && a.loading.is_none());
+        let photo = s.app.photo.as_ref().unwrap();
+        assert_eq!((photo.name.as_str(), photo.orig_size), ("beach.png", [96, 64]));
+        assert_eq!(s.app.tray.len(), 1);
+        assert_eq!(s.app.current, Some(s.app.tray[0].id));
+        assert_eq!(s.app.recents.items[0].asset.name, "beach.png");
+        assert!(s.app.recents.items[0].thumb.is_file(), "its thumbnail was saved");
+        assert!(s.app.render_due.is_some() || s.app.render.is_some() || !s.app.artworks.is_empty(), "a first render follows");
+    }
+
+    #[test]
+    fn opening_several_stages_the_first_and_stacks_the_rest() {
+        let mut s = studio();
+        let (a, b) = (photo_asset("a.png"), photo_asset("b.png"));
+        s.app.open(vec![OpenRequest::Asset(a), OpenRequest::Asset(b)]);
+        assert_eq!(s.app.loading.as_ref().unwrap().label, "a.png + 1 more");
+        s.until("both photos", |a| a.loading.is_none() && a.tray.len() == 2);
+        assert_eq!(s.app.photo.as_ref().unwrap().name, "a.png");
+        assert!(s.app.tray.iter().all(|t| t.session.is_none()));
+    }
+
+    #[test]
+    fn nothing_to_open_changes_nothing() {
+        let mut s = studio();
+        s.app.open(vec![]);
+        assert!(s.app.loading.is_none());
+    }
+
+    #[test]
+    fn a_newer_open_cancels_the_one_in_progress() {
+        let mut s = studio();
+        s.app.open(vec![OpenRequest::Asset(photo_asset("a.png"))]);
+        let cancel = s.app.loading.as_ref().unwrap().cancel.clone();
+        s.app.open(vec![OpenRequest::Asset(photo_asset("b.png"))]);
+        assert!(cancel.load(Ordering::Relaxed));
+        s.until("the second photo", |a| a.loading.is_none() && a.photo.is_some());
+        assert_eq!(s.app.photo.as_ref().unwrap().name, "b.png");
+    }
+
+    #[test]
+    fn photos_that_cannot_open_are_explained() {
+        let mut s = studio();
+        let junk = photo_asset("junk.png");
+        std::fs::write(&junk.local, "not a picture").unwrap();
+        let gone = Asset { local: "/no/such/gone.png".into(), ..photo_asset("gone.png") };
+        s.app.open(vec![OpenRequest::Asset(junk), OpenRequest::Asset(gone), OpenRequest::Input(Input::File("/no/such/file.png".into()))]);
+        s.until("the failures", |a| a.loading.is_none());
+        assert!(s.app.photo.is_none());
+        let toasts = s.toasts().join("\n");
+        assert!(toasts.contains("Could not open junk.png"), "{toasts}");
+        assert!(toasts.contains("gone.png is no longer available"), "{toasts}");
+        assert!(toasts.contains("was not found"), "{toasts}");
+    }
+
+    #[test]
+    fn pasted_text_opens_links_and_paths_or_explains_itself() {
+        let mut s = studio();
+        s.app.open_text("hello world");
+        assert!(s.app.loading.is_none());
+        assert_eq!(s.toasts().len(), 1);
+        let asset = photo_asset("pasted.png");
+        s.app.open_text(&format!("{}\n", asset.local.display()));
+        s.until("the photo", |a| a.photo.is_some() && a.loading.is_none());
+        assert_eq!(s.app.photo.as_ref().unwrap().name, "pasted.png");
+    }
+
+    #[test]
+    fn recents_reopen_their_photo_and_forget_lost_ones() {
+        let mut s = studio();
+        s.app.open_recent(0); // Nothing there.
+        assert!(s.app.loading.is_none());
+        s.app.recents.push(photo_asset("kept.png"), "t.jpg".into());
+        s.app.open_recent(0);
+        s.until("the photo", |a| a.photo.is_some() && a.loading.is_none());
+        assert_eq!(s.app.photo.as_ref().unwrap().name, "kept.png");
+
+        let lost = Asset { local: "/no/such/lost.png".into(), name: "lost.png".into(), origin: crate::sources::Origin::Clipboard };
+        s.app.recents.push(lost, "t.jpg".into());
+        s.app.open_recent(0);
+        assert_eq!(s.toasts().last().unwrap(), &"That pasted image is no longer cached");
+        assert!(s.app.recents.items.iter().all(|r| r.asset.name != "lost.png"));
+    }
+
+    #[test]
+    fn cancelling_stops_the_load_once() {
+        let mut s = studio();
+        s.app.cancel_loading();
+        assert!(s.toasts().is_empty());
+        s.app.open(vec![OpenRequest::Asset(photo_asset("a.png"))]);
+        let cancel = s.app.loading.as_ref().unwrap().cancel.clone();
+        s.app.cancel_loading();
+        assert!(cancel.load(Ordering::Relaxed) && s.app.loading.is_none());
+        assert_eq!(s.toasts(), ["Cancelled"]);
+    }
+
+    #[test]
+    fn switching_photos_parks_and_restores_their_studio_state() {
+        let mut s = studio();
+        let first = s.with_photo("first.png");
+        let art = s.app.add_artwork("Kept".into(), "".into(), Kind::Algorithm, img(), true);
+        s.app.selected = Some(art);
+        s.app.zoom = 3.0;
+        let second = s.with_photo("second.png");
+        assert_ne!(first, second);
+        assert!(s.app.artworks.is_empty() && s.app.selected.is_none());
+        assert_eq!(s.app.zoom, 1.0);
+
+        s.app.switch_to(first);
+        assert_eq!(s.app.current, Some(first));
+        assert_eq!(s.app.photo.as_ref().unwrap().name, "first.png");
+        assert_eq!((s.app.artworks[0].title.as_str(), s.app.selected), ("Kept", Some(art)));
+        assert!(s.app.tray.iter().find(|t| t.id == second).unwrap().session.is_some(), "the other one is parked");
+        assert!(s.app.tray.iter().find(|t| t.id == first).unwrap().session.is_none());
+    }
+
+    #[test]
+    fn switching_cancels_the_render_in_progress() {
+        let mut s = studio();
+        let first = s.with_photo("first.png");
+        s.with_photo("second.png");
+        let cancel: Arc<AtomicBool> = Default::default();
+        s.app.render = Some(crate::app::RenderJob { id: 900, style: "oil".into(), progress: Default::default(), cancel: cancel.clone() });
+        s.app.switch_to(first);
+        assert!(cancel.load(Ordering::Relaxed));
+        assert!(s.app.render.is_none());
+    }
+
+    #[test]
+    fn a_photo_without_a_session_develops_again() {
+        let mut s = studio();
+        let asset = photo_asset("stack.png");
+        s.app.on_acquired(asset, ColorImage::filled([2, 2], egui::Color32::RED), "t.jpg".into());
+        let id = s.app.tray[0].id;
+        s.app.switch_to(id);
+        assert_eq!(s.app.switching_to, Some(id));
+        s.until("the photo", |a| a.photo.is_some() && a.switching_to.is_none());
+        assert_eq!(s.app.current, Some(id));
+    }
+
+    #[test]
+    fn changing_your_mind_mid_switch_stays_on_the_current_photo() {
+        let mut s = studio();
+        let current = s.with_photo("current.png");
+        s.app.on_acquired(photo_asset("other.png"), ColorImage::filled([2, 2], egui::Color32::RED), "t.jpg".into());
+        let other = s.app.tray[1].id;
+        s.app.switch_to(other);
+        let cancel = s.app.loading.as_ref().unwrap().cancel.clone();
+        s.app.switch_to(current);
+        assert!(cancel.load(Ordering::Relaxed));
+        assert!(s.app.loading.is_none() && s.app.switching_to.is_none());
+        s.app.switch_to(9999); // Unknown photos are ignored.
+        assert_eq!(s.app.current, Some(current));
+    }
+
+    #[test]
+    fn stepping_through_photos_wraps_around() {
+        let mut s = studio();
+        s.app.tray_step(1); // No photos.
+        let a = s.with_photo("a.png");
+        s.app.tray_step(1); // Only one: stays.
+        assert_eq!(s.app.current, Some(a));
+        let b = s.with_photo("b.png");
+        let c = s.with_photo("c.png");
+        s.app.tray_step(1);
+        assert_eq!(s.app.current, Some(a), "past the end");
+        s.app.tray_step(-1);
+        assert_eq!(s.app.current, Some(c), "before the start");
+        s.app.tray_step(-1);
+        assert_eq!(s.app.current, Some(b));
+    }
+
+    #[test]
+    fn removing_photos_moves_on_to_the_next_and_forgets_their_jobs() {
+        let mut s = studio();
+        let a = s.with_photo("a.png");
+        let b = s.with_photo("b.png");
+        s.app.job_photo.insert(5, b);
+        s.app.remove_from_tray(b);
+        assert_eq!(s.app.current, Some(a));
+        assert!(s.app.job_photo.is_empty());
+        assert_eq!(s.app.tray.len(), 1);
+        s.app.remove_from_tray(a);
+        assert_eq!(s.app.current, None);
+        assert!(s.app.photo.is_none() && s.app.tray.is_empty());
+    }
+
+    #[test]
+    fn opening_a_photo_again_reuses_its_tray_item() {
+        let mut s = studio();
+        let asset = photo_asset("again.png");
+        let thumb = || ColorImage::filled([2, 2], egui::Color32::RED);
+        s.app.on_acquired(asset.clone(), thumb(), "t1.jpg".into());
+        s.app.on_acquired(asset.clone(), thumb(), "t2.jpg".into());
+        assert_eq!(s.app.tray.len(), 1);
+        assert_eq!(s.app.recents.items.len(), 1);
+        assert_eq!(s.app.recents.items[0].thumb, PathBuf::from("t2.jpg"));
+        let id = s.app.tray[0].id;
+        let work = img();
+        let color = color_image(&work);
+        s.app.on_photo(asset, work.clone(), work, color, [8, 8]);
+        assert_eq!(s.app.current, Some(id));
+        assert_eq!(s.app.tray.len(), 1);
+    }
+
+    #[test]
+    fn jobs_remember_the_photo_they_started_for() {
+        let mut s = studio();
+        let job = |id| crate::ai::Job::for_test(id, "J", Engine::Claude, crate::ai::JobStatus::Running);
+        s.app.track_job(job(1));
+        assert!(s.app.job_photo.is_empty(), "no photo on stage");
+        let photo = s.with_photo("p.png");
+        s.app.track_job(job(2));
+        assert_eq!(s.app.job_photo[&2], photo);
+        assert_eq!(s.app.jobs.len(), 2);
+    }
+
+    #[test]
+    fn parked_photos_receive_every_kind_of_result() {
+        let mut s = studio();
+        let first = s.with_photo("first.png");
+        let art = s.app.add_artwork("Old".into(), "".into(), Kind::Algorithm, img(), true);
+        s.with_photo("second.png");
+
+        s.app.deliver_to_parked(first, AiOutput::Director(report("Direction", &[])));
+        s.app.deliver_to_parked(
+            first,
+            AiOutput::Image {
+                title: "Dusk".into(),
+                subtitle: "AI".into(),
+                engine: Engine::Codex,
+                img: image::RgbImage::new(20, 20),
+                prompt: "p".into(),
+                saved: "/tmp/s.png".into(),
+            },
+        );
+        let label = Placard { title: "Label".into(), ..Default::default() };
+        s.app.deliver_to_parked(first, AiOutput::Placard { artwork_id: art, placard: label });
+        s.app.deliver_to_parked(9999, AiOutput::Director(report("Nobody", &[])));
+
+        let session = s.app.tray.iter().find(|t| t.id == first).unwrap().session.as_ref().unwrap();
+        assert_eq!(session.director.as_ref().unwrap().report.title, "Direction");
+        assert_eq!(session.artworks[0].placard.as_ref().unwrap().title, "Label");
+        let dusk = &session.artworks[1];
+        assert_eq!((dusk.title.as_str(), dusk.display.w, dusk.display.h, dusk.pinned), ("Dusk", 96, 64, true));
+        assert_eq!(
+            s.toasts(),
+            ["Art direction for first.png is ready: “Direction”", "“Dusk” arrived for first.png — it's waiting in its stack"]
+        );
+
+        // On return, its recipes get previews.
+        s.app.tray.iter_mut().find(|t| t.id == first).unwrap().session.as_mut().unwrap().director =
+            Some(Director { report: report("Direction", &[("A", "pixel")]), thumbs: vec![], generation: 0 });
+        s.app.switch_to(first);
+        s.until("the recipe preview", |a| a.director.as_ref().unwrap().thumbs.first().is_some_and(|t| t.is_some()));
+    }
+
+    #[test]
+    fn recent_thumbnails_decode_once_and_tolerate_missing_files() {
+        let mut s = studio();
+        let path = photo_asset("thumb.png").local;
+        assert!(s.app.recent_texture(&path).is_some());
+        std::fs::remove_file(&path).unwrap();
+        assert!(s.app.recent_texture(&path).is_some(), "served from memory");
+        assert!(s.app.recent_texture(&PathBuf::from("/no/such/thumb.png")).is_none());
+    }
+}

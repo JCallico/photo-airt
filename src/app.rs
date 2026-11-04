@@ -229,10 +229,23 @@ impl App {
             m.options = options;
         });
         crate::theme::install(&cc.egui_ctx);
+        let mut app = Self::idle(cc.egui_ctx.clone(), Prefs::load(), Recents::load());
+        app.rescan_clis();
+        app.rescan_plugins();
+        if let Some(raw) = initial {
+            match sources::classify(&raw) {
+                Ok(input) => app.open(vec![crate::app_open::OpenRequest::Input(input)]),
+                Err(e) => app.toast(format!("Could not open “{raw}”: {e}"), crate::theme::DANGER),
+            }
+        }
+        app
+    }
+
+    /// The app before it looks outside: no CLIs detected, no plug-ins scanned.
+    fn idle(ctx: egui::Context, prefs: Prefs, recents: Recents) -> Self {
         let (tx, rx) = channel();
         let (ai_tx, ai_rx) = channel();
-        let ctx = cc.egui_ctx.clone();
-        let mut app = Self {
+        Self {
             hub: AiHub::new(ai_tx, ctx.clone()),
             ctx,
             photo: None,
@@ -266,7 +279,7 @@ impl App {
             duet: false,
             director_role: None,
             painter_role: None,
-            prefs: Prefs::load(),
+            prefs,
             vector_style: 0,
             toasts: vec![],
             reveal: None,
@@ -278,7 +291,7 @@ impl App {
             recipe_title: None,
             tray: vec![],
             current: None,
-            recents: Recents::load(),
+            recents,
             recent_tex: HashMap::new(),
             open_sheet: Default::default(),
             job_photo: HashMap::new(),
@@ -288,16 +301,7 @@ impl App {
             scanning_plugins: false,
             plugins_open: false,
             overview: Default::default(),
-        };
-        app.rescan_clis();
-        app.rescan_plugins();
-        if let Some(raw) = initial {
-            match sources::classify(&raw) {
-                Ok(input) => app.open(vec![crate::app_open::OpenRequest::Input(input)]),
-                Err(e) => app.toast(format!("Could not open “{raw}”: {e}"), crate::theme::DANGER),
-            }
         }
-        app
     }
 
     pub fn now(&self) -> f64 {
@@ -1035,4 +1039,796 @@ pub fn open_in_file_manager(dir: &std::path::Path) {
         "xdg-open"
     };
     let _ = std::process::Command::new(program).arg(dir).spawn();
+}
+
+#[cfg(test)]
+pub(crate) mod test_support {
+    //! A headless studio for tests: the real app and UI on an `egui::Context`
+    //! with no window. It never runs the AI CLIs, reads the clipboard or opens
+    //! dialogs, and `photo_io::user_dir` keeps its files out of the user's.
+
+    use std::sync::atomic::AtomicU64;
+
+    use egui::{Event, Key, Modifiers, PointerButton, Pos2, Rect, Shape};
+
+    use super::*;
+
+    #[derive(Debug)]
+    pub struct DroppedPath(pub std::path::PathBuf);
+
+    impl egui::DroppedFile for DroppedPath {
+        fn path(&self) -> &std::path::Path {
+            &self.0
+        }
+
+        fn bytes(&self) -> Result<Vec<u8>, String> {
+            std::fs::read(&self.0).map_err(|e| e.to_string())
+        }
+    }
+
+    pub struct Studio {
+        pub app: App,
+        pub size: [f32; 2],
+        pub texts: Vec<(String, Rect)>,
+        time: f64,
+    }
+
+    fn collect(shape: &Shape, clip: Rect, out: &mut Vec<(String, Rect)>) {
+        match shape {
+            Shape::Vec(shapes) => shapes.iter().for_each(|s| collect(s, clip, out)),
+            Shape::Text(t) => {
+                let rect = t.galley.rect.translate(t.pos.to_vec2());
+                if clip.intersects(rect) && !t.galley.text().trim().is_empty() {
+                    out.push((t.galley.text().to_string(), rect.intersect(clip)));
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// An empty studio that has drawn its first frame.
+    pub fn studio() -> Studio {
+        let ctx = egui::Context::default();
+        crate::theme::install(&ctx);
+        let app = App::idle(ctx, Prefs::default(), Recents::default());
+        let mut s = Studio { app, size: [1600.0, 980.0], texts: vec![], time: 1.0 };
+        s.frame();
+        s
+    }
+
+    /// A photo file of its own, as a file-origin asset.
+    pub fn photo_asset(name: &str) -> Asset {
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        let dir = photo_io::user_dir(None).join("photos").join(NEXT.fetch_add(1, Ordering::Relaxed).to_string());
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(name);
+        image::RgbImage::from_fn(96, 64, |x, y| image::Rgb([(x * 2) as u8, (y * 3) as u8, 90])).save(&path).unwrap();
+        let path = photo_io::canonicalize(&path).unwrap();
+        Asset { local: path.clone(), name: name.into(), origin: sources::Origin::File { path } }
+    }
+
+    pub fn test_img() -> Img {
+        Img::from_rgb8(&image::RgbImage::from_fn(96, 64, |x, y| image::Rgb([(x * 2) as u8, (y * 3) as u8, 90])))
+    }
+
+    pub fn report(title: &str, recipes: &[(&str, &str)]) -> DirectorReport {
+        let recipes: Vec<_> = recipes.iter().map(|(n, s)| serde_json::json!({"name": n, "style": s, "why": "because"})).collect();
+        serde_json::from_value(serde_json::json!({
+            "title": title, "reading": "A reading", "palette": ["#112233"], "recipes": recipes, "paint_prompt": "a brief",
+        }))
+        .unwrap()
+    }
+
+    impl Studio {
+        /// Draw one frame with `events`, as `eframe::App::ui` would.
+        pub fn frame_with(&mut self, events: Vec<Event>, modifiers: Modifiers, dropped: Vec<egui::DroppedFileHandle>) {
+            self.time += 1.0 / 60.0;
+            let raw = egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, self.size.into())),
+                time: Some(self.time),
+                predicted_dt: 1.0 / 60.0,
+                events: std::iter::once(Event::ModifiersChanged(modifiers)).chain(events).collect(),
+                dropped_files: dropped,
+                ..Default::default()
+            };
+            let ctx = self.app.ctx.clone();
+            let app = &mut self.app;
+            let output = ctx.run_ui(raw, |ui| {
+                app.pump();
+                app.shortcuts(ui.ctx());
+                app.draw(ui);
+            });
+            self.texts.clear();
+            for clipped in &output.shapes {
+                collect(&clipped.shape, clipped.clip_rect, &mut self.texts);
+            }
+        }
+
+        pub fn frame(&mut self) {
+            self.frame_with(vec![], Modifiers::NONE, vec![]);
+        }
+
+        /// Whether some text on screen contains `text`.
+        pub fn shows(&self, text: &str) -> bool {
+            self.texts.iter().any(|(t, _)| t.contains(text))
+        }
+
+        /// A key press and release with `modifiers`.
+        pub fn press(&mut self, key: Key, modifiers: Modifiers) {
+            let event = |pressed| Event::Key { key, physical_key: None, pressed, repeat: false, modifiers };
+            self.frame_with(vec![event(true)], modifiers, vec![]);
+            self.frame_with(vec![event(false)], modifiers, vec![]);
+        }
+
+        /// Click the topmost text on screen that equals `text`.
+        pub fn click(&mut self, text: &str) {
+            let rect = self.texts.iter().rev().find(|(t, _)| t == text).unwrap_or_else(|| panic!("no “{text}” in {:?}", self.labels())).1;
+            let pos = rect.center();
+            let button = |pressed| Event::PointerButton { pos, button: PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
+            self.frame_with(vec![Event::PointerMoved(pos)], Modifiers::NONE, vec![]);
+            self.frame_with(vec![button(true)], Modifiers::NONE, vec![]);
+            self.frame_with(vec![button(false)], Modifiers::NONE, vec![]);
+            // Away again, so nothing stays hovered.
+            self.frame_with(vec![Event::PointerGone], Modifiers::NONE, vec![]);
+        }
+
+        pub fn labels(&self) -> Vec<&str> {
+            self.texts.iter().map(|(t, _)| t.as_str()).collect()
+        }
+
+        /// Draw frames until `done`, waiting for background work.
+        pub fn until(&mut self, what: &str, done: impl Fn(&App) -> bool) {
+            let started = std::time::Instant::now();
+            while !done(&self.app) {
+                assert!(started.elapsed().as_secs() < 120, "timed out waiting for {what}");
+                std::thread::sleep(std::time::Duration::from_millis(5));
+                self.frame();
+            }
+            self.frame();
+        }
+
+        /// Put a photo on stage, as a finished open does.
+        pub fn with_photo(&mut self, name: &str) -> u64 {
+            let asset = photo_asset(name);
+            let work = test_img();
+            let color = color_image(&work);
+            self.app.on_photo(asset, work.clone(), work, color, [96, 64]);
+            self.app.render_due = None;
+            self.frame();
+            self.app.current.unwrap()
+        }
+
+        /// A photo with its algorithm draft rendered and selected.
+        pub fn with_draft(&mut self, name: &str) -> u64 {
+            self.with_photo(name);
+            self.app.render_due = Some(0.0);
+            self.until("the draft", |a| a.draft_id().is_some() && a.render.is_none());
+            self.app.draft_id().unwrap()
+        }
+
+        pub fn toasts(&self) -> Vec<&str> {
+            self.app.toasts.iter().map(|t| t.text.as_str()).collect()
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::test_support::*;
+    use super::*;
+    use crate::ai::{Cli, JobStatus, ModelInfo};
+    use crate::sources::Origin;
+
+    fn solid(w: usize, h: usize) -> Img {
+        Img::new(w, h, [0.5; 3])
+    }
+
+    fn rendered(job: u64, style: &str) -> WorkerMsg {
+        let img = Arc::new(solid(8, 8));
+        WorkerMsg::Rendered {
+            job,
+            style: style.into(),
+            params: Params::default(),
+            seed: 3,
+            base: img.clone(),
+            display: img.clone(),
+            color: color_image(&img),
+        }
+    }
+
+    fn render_job(app: &mut App, id: u64) -> Arc<AtomicBool> {
+        let cancel = Arc::new(AtomicBool::new(false));
+        app.render = Some(RenderJob { id, style: "oil".into(), progress: Default::default(), cancel: cancel.clone() });
+        cancel
+    }
+
+    fn event(result: Result<AiOutput, String>) -> AiEvent {
+        AiEvent { job_id: 77, result, models: vec![] }
+    }
+
+    fn painted(title: &str) -> AiOutput {
+        AiOutput::Image {
+            title: title.into(),
+            subtitle: "AI".into(),
+            engine: Engine::Codex,
+            img: image::RgbImage::from_pixel(40, 40, image::Rgb([9, 9, 9])),
+            prompt: "a prompt".into(),
+            saved: "/tmp/saved.png".into(),
+        }
+    }
+
+    #[test]
+    fn covering_scales_and_crops_without_stretching() {
+        let mut src = solid(100, 50);
+        // A red band across the middle of the width, to see the crop.
+        src = src.map_xy(|x, _, _| if (40..60).contains(&x) { [1.0, 0.0, 0.0] } else { [0.0; 3] });
+        let out = cover_to(&src, 50, 50);
+        assert_eq!((out.w, out.h), (50, 50));
+        assert!(out.at(25, 25)[0] > 0.9, "the middle survives");
+        assert!(out.at(1, 25)[0] < 0.2, "the sides are cropped, not squeezed in");
+        let same = cover_to(&solid(30, 20), 30, 20);
+        assert_eq!((same.w, same.h), (30, 20));
+    }
+
+    #[test]
+    fn a_new_app_is_ready_with_the_first_style() {
+        let s = studio();
+        assert!(s.app.photo.is_none() && s.app.artworks.is_empty());
+        assert_eq!(s.app.style_id, "oil");
+        assert_eq!(s.app.paint_brief, ai::PAINT_PRESETS[0].prompt);
+    }
+
+    #[test]
+    fn photos_from_an_older_open_are_ignored() {
+        let mut s = studio();
+        s.app.loading =
+            Some(LoadState { batch: 2, label: "x".into(), stage: String::new(), done: 0, total: None, cancel: Default::default() });
+        let work = test_img();
+        let color = color_image(&work);
+        let msg =
+            WorkerMsg::PhotoLoaded { batch: 1, result: Ok((photo_asset("old.png"), work.clone(), work.clone(), color.clone(), [96, 64])) };
+        s.app.on_worker(msg);
+        assert!(s.app.photo.is_none());
+        assert!(s.app.loading.is_some());
+        let msg = WorkerMsg::PhotoLoaded { batch: 2, result: Ok((photo_asset("new.png"), work.clone(), work, color, [96, 64])) };
+        s.app.on_worker(msg);
+        assert_eq!(s.app.photo.as_ref().unwrap().name, "new.png");
+    }
+
+    #[test]
+    fn a_failed_open_clears_only_its_own_progress_and_says_why() {
+        let mut s = studio();
+        s.app.loading =
+            Some(LoadState { batch: 2, label: "x".into(), stage: String::new(), done: 0, total: None, cancel: Default::default() });
+        s.app.on_worker(WorkerMsg::PhotoLoaded { batch: 1, result: Err("old".into()) });
+        assert!(s.app.loading.is_some());
+        s.app.on_worker(WorkerMsg::PhotoLoaded { batch: 2, result: Err("corrupt".into()) });
+        assert!(s.app.loading.is_none());
+        assert_eq!(s.toasts(), ["Could not open photo: old", "Could not open photo: corrupt"]);
+    }
+
+    #[test]
+    fn download_progress_only_updates_its_own_batch() {
+        let mut s = studio();
+        s.app.loading =
+            Some(LoadState { batch: 2, label: "x".into(), stage: "start".into(), done: 0, total: None, cancel: Default::default() });
+        let progress = |stage: &str| sources::Progress { stage: stage.into(), done: 5, total: Some(10) };
+        s.app.on_worker(WorkerMsg::Acquiring { batch: 1, progress: progress("other") });
+        assert_eq!(s.app.loading.as_ref().unwrap().stage, "start");
+        s.app.on_worker(WorkerMsg::Acquiring { batch: 2, progress: progress("mine") });
+        let l = s.app.loading.as_ref().unwrap();
+        assert_eq!((l.stage.as_str(), l.done, l.total), ("mine", 5, Some(10)));
+    }
+
+    #[test]
+    fn a_cancelled_download_fails_quietly() {
+        let mut s = studio();
+        s.app.on_worker(WorkerMsg::AcquireFailed { error: "download cancelled".into() });
+        assert!(s.toasts().is_empty());
+        s.app.on_worker(WorkerMsg::AcquireFailed { error: "That link is broken".into() });
+        assert_eq!(s.toasts(), ["That link is broken"]);
+    }
+
+    #[test]
+    fn style_previews_from_an_older_photo_are_ignored() {
+        let mut s = studio();
+        s.app.thumb_gen = 5;
+        let img = color_image(&solid(4, 4));
+        s.app.on_worker(WorkerMsg::Thumb { generation: 4, style: "oil".into(), img: img.clone() });
+        assert!(s.app.thumbs.is_empty());
+        s.app.on_worker(WorkerMsg::Thumb { generation: 5, style: "oil".into(), img });
+        assert!(s.app.thumbs.contains_key("oil"));
+    }
+
+    #[test]
+    fn recipe_previews_land_on_the_current_report_only() {
+        let mut s = studio();
+        s.app.director = Some(Director { report: report("T", &[("A", "oil")]), thumbs: vec![None], generation: 3 });
+        let img = color_image(&solid(4, 4));
+        s.app.on_worker(WorkerMsg::RecipeThumb { generation: 2, idx: 0, img: img.clone() });
+        assert!(s.app.director.as_ref().unwrap().thumbs[0].is_none());
+        s.app.on_worker(WorkerMsg::RecipeThumb { generation: 3, idx: 9, img: img.clone() });
+        s.app.on_worker(WorkerMsg::RecipeThumb { generation: 3, idx: 0, img });
+        assert!(s.app.director.as_ref().unwrap().thumbs[0].is_some());
+    }
+
+    #[test]
+    fn a_render_replaces_the_draft_and_kept_artworks_stay() {
+        let mut s = studio();
+        render_job(&mut s.app, 10);
+        s.app.recipe_title = Some("Moonlit".into());
+        s.app.on_worker(rendered(10, "oil"));
+        let first = s.app.draft_id().unwrap();
+        assert!(s.app.render.is_none());
+        assert_eq!(s.app.selected, Some(first));
+        let a = s.app.selected_artwork().unwrap();
+        assert_eq!(a.title, "Moonlit", "the recipe names the artwork");
+        assert!(a.subtitle.starts_with("Algorithm · "));
+        assert!(s.app.reveal.as_ref().unwrap().prev.is_none());
+
+        render_job(&mut s.app, 11);
+        s.app.on_worker(rendered(11, "halftone"));
+        assert_eq!(s.app.artworks.len(), 1, "the draft is reused");
+        let a = s.app.selected_artwork().unwrap();
+        assert_ne!(a.title, "Moonlit", "the recipe's name was for one render");
+        assert_eq!(a.finish_gen, 1);
+        assert_eq!(a.recipe.as_ref().unwrap().0, "halftone");
+        assert!(s.app.reveal.as_ref().unwrap().prev.is_some(), "the old picture cross-fades");
+
+        s.app.pin_draft();
+        assert_eq!(s.toasts().last().unwrap(), &format!("Kept “{}” in the collection", s.app.artworks[0].title));
+        render_job(&mut s.app, 12);
+        s.app.on_worker(rendered(12, "pixel"));
+        assert_eq!(s.app.artworks.len(), 2, "a kept artwork is never replaced");
+        assert_ne!(s.app.draft_id(), Some(first));
+    }
+
+    #[test]
+    fn results_of_superseded_renders_are_dropped() {
+        let mut s = studio();
+        render_job(&mut s.app, 10);
+        s.app.on_worker(rendered(9, "oil"));
+        assert!(s.app.artworks.is_empty());
+        assert!(s.app.render.is_some());
+        s.app.on_worker(WorkerMsg::RenderFailed { job: 9, style: "oil".into(), error: "old".into() });
+        assert!(s.app.render.is_some() && s.toasts().is_empty());
+    }
+
+    #[test]
+    fn a_failed_render_names_the_style_and_bounds_the_message() {
+        let mut s = studio();
+        render_job(&mut s.app, 10);
+        s.app.on_worker(WorkerMsg::RenderFailed { job: 10, style: "oil".into(), error: "x".repeat(500) });
+        assert!(s.app.render.is_none());
+        let name = plugins::registry().get("oil").unwrap().description().name.clone();
+        let toast = s.toasts()[0].to_string();
+        assert!(toast.starts_with(&format!("{name} failed: ")));
+        assert_eq!(toast.matches('x').count(), 220);
+    }
+
+    #[test]
+    fn a_finish_applied_by_a_recipe_reaches_the_render_it_was_for() {
+        let mut s = studio();
+        let glow = Finish { glow: 0.5, ..Default::default() };
+        render_job(&mut s.app, 10);
+        s.app.pending_finish_for_render = Some((10, glow));
+        s.app.on_worker(rendered(10, "oil"));
+        assert_eq!(s.app.selected_artwork().unwrap().finish, glow);
+        render_job(&mut s.app, 11);
+        s.app.pending_finish_for_render = Some((99, glow));
+        s.app.on_worker(rendered(11, "oil"));
+        assert!(s.app.selected_artwork().unwrap().finish.is_identity());
+    }
+
+    #[test]
+    fn only_the_latest_refinish_of_an_artwork_is_shown() {
+        let mut s = studio();
+        let id = s.app.add_artwork("T".into(), "S".into(), Kind::Algorithm, solid(4, 4), false);
+        s.app.artworks[0].finish_gen = 2;
+        let new = Arc::new(Img::new(4, 4, [1.0; 3]));
+        let msg = |generation| WorkerMsg::Finished { artwork: id, generation, display: new.clone(), color: color_image(&new) };
+        s.app.on_worker(msg(1));
+        assert_eq!(s.app.artworks[0].display.at(0, 0), [0.5; 3]);
+        s.app.on_worker(msg(2));
+        assert_eq!(s.app.artworks[0].display.at(0, 0), [1.0; 3]);
+    }
+
+    #[test]
+    fn saving_reports_where_the_file_went_or_why_it_failed() {
+        let mut s = studio();
+        s.app.exporting = true;
+        s.app.on_worker(WorkerMsg::Exported(Ok("/pics/a.png".into())));
+        assert!(!s.app.exporting);
+        s.app.exporting = true;
+        s.app.on_worker(WorkerMsg::Exported(Err("disk full".into())));
+        assert!(!s.app.exporting);
+        assert_eq!(s.toasts()[1], "Export failed: disk full");
+        assert!(s.toasts()[0].starts_with("Saved "));
+    }
+
+    #[test]
+    fn selecting_an_artwork_restores_its_style_settings_and_seed() {
+        let mut s = studio();
+        let id = s.app.add_artwork("T".into(), "S".into(), Kind::Algorithm, solid(4, 4), true);
+        let mut params = Params::default();
+        params.0.insert("k".into(), plugins::Value::Number(2.0));
+        s.app.artworks[0].recipe = Some(("pixel".into(), params.clone(), 99));
+        s.app.select(Some(id));
+        assert_eq!((s.app.style_id.as_str(), s.app.seed), ("pixel", 99));
+        assert_eq!(s.app.params["pixel"], params);
+        s.app.select(None);
+        assert!(s.app.selected_artwork().is_none());
+        assert_eq!(s.app.style_id, "pixel", "the original photo leaves the style alone");
+    }
+
+    #[test]
+    fn navigating_walks_from_the_photo_through_the_artworks_and_stops_at_the_ends() {
+        let mut s = studio();
+        let a = s.app.add_artwork("A".into(), "".into(), Kind::Algorithm, solid(4, 4), true);
+        let b = s.app.add_artwork("B".into(), "".into(), Kind::Algorithm, solid(4, 4), true);
+        s.app.navigate(-1);
+        assert_eq!(s.app.selected, None);
+        s.app.navigate(1);
+        assert_eq!(s.app.selected, Some(a));
+        s.app.navigate(1);
+        s.app.navigate(1);
+        assert_eq!(s.app.selected, Some(b));
+    }
+
+    #[test]
+    fn deleting_the_selected_artwork_selects_the_last_one() {
+        let mut s = studio();
+        let a = s.app.add_artwork("A".into(), "".into(), Kind::Algorithm, solid(4, 4), true);
+        let b = s.app.add_artwork("B".into(), "".into(), Kind::Algorithm, solid(4, 4), true);
+        let c = s.app.add_artwork("C".into(), "".into(), Kind::Algorithm, solid(4, 4), true);
+        s.app.selected = Some(a);
+        s.app.delete_artwork(b);
+        assert_eq!(s.app.selected, Some(a), "another selection is left alone");
+        s.app.delete_artwork(a);
+        assert_eq!(s.app.selected, Some(c));
+        s.app.delete_artwork(c);
+        assert_eq!(s.app.selected, None);
+    }
+
+    #[test]
+    fn settings_start_from_each_styles_defaults() {
+        let mut s = studio();
+        let oil = plugins::registry().get("oil").unwrap().description().clone();
+        assert_eq!(*s.app.params_for("oil"), Params::defaults(&oil));
+        assert_eq!(*s.app.params_for("no-such-style"), Params::default());
+    }
+
+    #[test]
+    fn choosing_a_style_jumps_back_to_the_draft_so_the_change_is_visible() {
+        let mut s = studio();
+        let draft = s.app.add_artwork("D".into(), "".into(), Kind::Algorithm, solid(4, 4), false);
+        let ai = s.app.add_artwork("AI".into(), "".into(), Kind::Ai(Engine::Codex), solid(4, 4), true);
+        s.app.selected = Some(ai);
+        s.app.select_style("pixel");
+        assert_eq!((s.app.style_id.as_str(), s.app.selected), ("pixel", Some(draft)));
+        assert!(s.app.render_due.is_some());
+        s.app.selected = None;
+        s.app.view = View::Gallery;
+        s.app.select_style("oil");
+        assert_eq!(s.app.selected, Some(draft));
+    }
+
+    #[test]
+    fn changing_settings_waits_a_moment_before_rendering() {
+        let mut s = studio();
+        s.app.params_changed();
+        assert!(s.app.render_due.unwrap() > s.app.now());
+    }
+
+    #[test]
+    fn a_new_render_stops_the_one_in_progress() {
+        let mut s = studio();
+        s.with_photo("p.png");
+        let cancel = render_job(&mut s.app, 500);
+        s.app.start_render();
+        assert!(cancel.load(Ordering::Relaxed));
+        assert_ne!(s.app.render.as_ref().unwrap().id, 500);
+    }
+
+    #[test]
+    fn rendering_runs_from_the_chosen_style_to_a_selected_artwork() {
+        let mut s = studio();
+        s.with_photo("p.png");
+        s.app.select_style("pixel");
+        s.until("the render", |a| a.selected_artwork().is_some_and(|x| x.recipe.as_ref().is_some_and(|r| r.0 == "pixel")));
+        let a = s.app.selected_artwork().unwrap();
+        assert_eq!((a.display.w, a.display.h), (96, 64));
+        assert!(a.subtitle.ends_with(&plugins::registry().get("pixel").unwrap().description().name));
+    }
+
+    #[test]
+    fn refinishing_applies_the_finish_in_the_background() {
+        let mut s = studio();
+        let id = s.app.add_artwork("T".into(), "".into(), Kind::Algorithm, solid(16, 16), true);
+        s.app.selected = Some(id);
+        s.app.selected_artwork_mut().unwrap().finish = Finish { exposure: 1.0, ..Default::default() };
+        s.app.refinish_selected();
+        s.until("the finish", |a| a.artworks[0].display.at(0, 0)[0] > 0.6);
+        assert_eq!(s.app.artworks[0].base.at(0, 0), [0.5; 3], "the base stays untouched");
+    }
+
+    #[test]
+    fn saving_needs_a_selected_artwork() {
+        let mut s = studio();
+        s.app.export_selected();
+        s.app.export_timelapse();
+        assert_eq!(s.toasts(), ["Select an artwork to export", "Select an artwork to export"]);
+        assert!(!s.app.exporting);
+    }
+
+    #[test]
+    fn saving_writes_the_artwork_in_the_output_folder() {
+        let mut s = studio();
+        let id = s.with_draft("Saved Photo.png");
+        s.app.artworks.iter_mut().find(|a| a.id == id).unwrap().title = "first".into();
+        s.app.export_selected();
+        assert!(s.app.exporting);
+        assert_eq!(s.toasts().last().unwrap(), &"Exporting at full resolution…");
+        s.app.export_selected(); // Ignored while one is under way.
+        assert_eq!(s.toasts().iter().filter(|t| t.starts_with("Exporting")).count(), 1);
+        s.until("the save", |a| !a.exporting);
+        let toast = s.toasts().last().unwrap().to_string();
+        let path = toast.strip_prefix("Saved ").unwrap_or_else(|| panic!("{toast}"));
+        assert!(std::path::Path::new(path).starts_with(photo_io::output_dir()));
+        assert_eq!(image::open(path).unwrap().width(), 96, "re-rendered from the photo's full size");
+        assert!(path.contains("saved-photo-first"), "{path}");
+    }
+
+    #[test]
+    fn an_ai_artwork_saves_as_it_is() {
+        let mut s = studio();
+        s.with_photo("p.png");
+        let id = s.app.add_artwork("Painted".into(), "".into(), Kind::Ai(Engine::Codex), solid(20, 10), true);
+        s.app.selected = Some(id);
+        s.app.export_selected();
+        s.until("the save", |a| !a.exporting);
+        let toast = s.toasts().last().unwrap().to_string();
+        assert_eq!(image::open(toast.strip_prefix("Saved ").unwrap()).unwrap().width(), 20);
+    }
+
+    #[test]
+    fn a_save_that_fails_says_so() {
+        let mut s = studio();
+        let id = s.with_draft("p.png");
+        // The style vanished since the artwork was made.
+        s.app.artworks.iter_mut().find(|a| a.id == id).unwrap().recipe.as_mut().unwrap().0 = "gone".into();
+        s.app.export_selected();
+        s.until("the failure", |a| !a.exporting);
+        assert!(s.toasts().last().unwrap().contains("style gone is no longer available"));
+    }
+
+    #[test]
+    fn time_lapses_come_from_algorithm_artworks_only() {
+        let mut s = studio();
+        s.with_photo("p.png");
+        let id = s.app.add_artwork("AI".into(), "".into(), Kind::Ai(Engine::Claude), solid(4, 4), true);
+        s.app.selected = Some(id);
+        s.app.export_timelapse();
+        assert_eq!(s.toasts().last().unwrap(), &"Time-lapses are made from algorithm styles");
+        assert!(!s.app.exporting);
+    }
+
+    #[test]
+    fn a_time_lapse_is_saved_as_a_gif() {
+        let mut s = studio();
+        s.app.style_id = "pixel".into();
+        s.with_draft("p.png");
+        s.app.export_timelapse();
+        assert!(s.app.exporting);
+        s.app.export_timelapse(); // Ignored while one is under way.
+        s.until("the time-lapse", |a| !a.exporting);
+        let toast = s.toasts().last().unwrap().to_string();
+        let path = toast.strip_prefix("Saved ").unwrap_or_else(|| panic!("{toast}"));
+        assert!(path.ends_with(".gif") && std::fs::read(path).unwrap().starts_with(b"GIF"), "{path}");
+    }
+
+    #[test]
+    fn recipes_set_up_the_next_render() {
+        let mut s = studio();
+        s.app.apply_recipe(0); // No report yet: nothing happens.
+        assert!(s.app.render_due.is_none());
+        let draft = s.app.add_artwork("D".into(), "".into(), Kind::Algorithm, solid(4, 4), false);
+        let mut report = report("T", &[("Moody", "pixel"), ("Lost", "no-such-style")]);
+        report.recipes[0].params.insert("size".into(), plugins::Value::Number(10_000.0));
+        report.recipes[0].finish = Finish { grain: 9.0, ..Default::default() };
+        s.app.director = Some(Director { report, thumbs: vec![], generation: 0 });
+        s.app.apply_recipe(0);
+        assert_eq!((s.app.style_id.as_str(), s.app.recipe_title.as_deref()), ("pixel", Some("Moody")));
+        assert_eq!(s.app.selected, Some(draft));
+        assert!(s.app.render_due.is_some());
+        assert_eq!(s.app.next_finish.unwrap().grain, 1.0, "AI values are clamped");
+        let size = s.app.params["pixel"].get("size");
+        assert!(size < 10_000.0, "AI values are clamped: {size}");
+
+        s.app.apply_recipe(1);
+        assert_eq!(s.toasts().last().unwrap(), &"Unknown style “no-such-style”");
+        assert_eq!(s.app.style_id, "pixel");
+    }
+
+    #[test]
+    fn jobs_need_a_photo_and_a_role_before_they_start() {
+        let mut s = studio();
+        s.app.run_director();
+        s.app.run_vector();
+        s.app.run_repaint("Oil".into(), "brief".into(), false);
+        s.app.run_placard();
+        assert!(s.app.jobs.is_empty());
+        s.with_photo("p.png");
+        s.app.run_director();
+        s.app.run_vector();
+        s.app.run_repaint("Oil".into(), "brief".into(), true);
+        s.app.run_placard();
+        assert!(s.app.jobs.is_empty(), "no CLI holds a role");
+    }
+
+    #[test]
+    fn busy_means_a_running_job_of_that_title() {
+        let mut s = studio();
+        s.app.jobs.push(ai::Job::for_test(1, "Art direction", Engine::Claude, JobStatus::Running));
+        s.app.jobs.push(ai::Job::for_test(2, "Repaint", Engine::Codex, JobStatus::Done));
+        assert!(s.app.ai_busy("Art direction"));
+        assert!(!s.app.ai_busy("Repaint"));
+        assert!(!s.app.ai_busy("Other"));
+    }
+
+    fn cli(models: &[&str], image_gen: bool) -> CliStatus {
+        let models = models.iter().map(|m| ModelInfo { id: m.to_string(), ..Default::default() }).collect();
+        CliStatus { found: true, version: "1.0".into(), image_gen, models, default_model: None }
+    }
+
+    #[test]
+    fn discovered_clis_fill_the_roles() {
+        let mut s = studio();
+        let (tx, rx) = channel();
+        s.app.cli_rx = Some(rx);
+        s.app.rescan_clis(); // One already running: no second detection.
+        assert!(s.app.claude.is_none());
+        tx.send((cli(&["opus"], false), cli(&[], true))).unwrap();
+        s.frame();
+        assert!(s.app.cli_rx.is_none());
+        assert_eq!(s.app.role(Role::Director).unwrap().cli, Cli::Claude);
+        assert_eq!(s.app.role(Role::Painter).unwrap().cli, Cli::Codex);
+        assert!(s.app.cli_status(Cli::Claude).unwrap().found && s.app.cli_status(Cli::Codex).unwrap().image_gen);
+    }
+
+    /// The one test that writes `prefs.json`, so it can read it back.
+    #[test]
+    fn model_health_and_role_choices_are_remembered() {
+        let mut s = studio();
+        let failed = "job: MODEL_UNAVAILABLE[claude:fable]: requires usage credits".to_string();
+        s.app.on_ai(event(Err(failed)));
+        assert_eq!(s.toasts()[0], "claude:fable is unavailable: requires usage credits. Pick another model under Roles.");
+        assert_eq!(Prefs::load().unavailable["claude:fable"], "requires usage credits");
+
+        // A success with that model clears the mark.
+        s.app.on_ai(AiEvent { job_id: 77, result: Ok(painted("T")), models: vec!["claude:fable".into()] });
+        assert!(Prefs::load().unavailable.is_empty());
+
+        let choice = RoleCfg { cli: Cli::Codex, model: "gpt-x".into() };
+        s.app.set_role(Role::Director, choice.clone());
+        s.app.set_role(Role::Painter, choice.clone());
+        assert_eq!(s.app.role(Role::Director), Some(&choice));
+        assert_eq!(s.app.role(Role::Painter), Some(&choice));
+        let saved = Prefs::load();
+        assert_eq!((saved.director, saved.painter), (Some(choice.clone()), Some(choice)));
+    }
+
+    #[test]
+    fn failed_jobs_say_so_unless_they_were_cancelled() {
+        let mut s = studio();
+        s.app.jobs.push(ai::Job::for_test(77, "Art direction", Engine::Claude, JobStatus::Running));
+        s.app.on_ai(event(Err("cancelled by the user".into())));
+        assert!(s.toasts().is_empty());
+        s.app.on_ai(event(Err("y".repeat(400))));
+        let toast = s.toasts()[0];
+        assert!(toast.starts_with("Art direction failed: "));
+        assert_eq!(toast.matches('y').count(), 160);
+    }
+
+    #[test]
+    fn art_direction_fills_the_brief_and_renders_its_recipes() {
+        let mut s = studio();
+        s.with_photo("p.png");
+        s.app.on_ai(event(Ok(AiOutput::Director(report("Golden hour", &[("A", "pixel"), ("B", "no-such-style")])))));
+        assert_eq!(s.toasts().last().unwrap(), &"Art direction ready: “Golden hour”");
+        assert_eq!(s.app.paint_brief, "a brief");
+        s.until("the recipe preview", |a| a.director.as_ref().unwrap().thumbs[0].is_some());
+        assert!(s.app.director.as_ref().unwrap().thumbs[1].is_none(), "an unknown style has no preview");
+    }
+
+    #[test]
+    fn a_painting_arrives_at_the_photos_size_and_on_stage() {
+        let mut s = studio();
+        s.with_photo("p.png");
+        s.app.on_ai(event(Ok(painted("Dusk"))));
+        let a = s.app.selected_artwork().unwrap();
+        assert_eq!((a.title.as_str(), a.kind, a.pinned), ("Dusk", Kind::Ai(Engine::Codex), true));
+        assert_eq!((a.display.w, a.display.h), (96, 64));
+        assert_eq!(a.prompt.as_deref(), Some("a prompt"));
+        assert_eq!(a.saved.as_deref(), Some(std::path::Path::new("/tmp/saved.png")));
+        assert!(s.app.reveal.is_some());
+        assert_eq!(s.toasts().last().unwrap(), &"“Dusk” has arrived");
+    }
+
+    #[test]
+    fn a_painting_with_no_photo_on_stage_is_dropped() {
+        let mut s = studio();
+        s.app.on_ai(event(Ok(painted("Dusk"))));
+        assert!(s.app.artworks.is_empty());
+    }
+
+    #[test]
+    fn wall_labels_reach_their_artwork() {
+        let mut s = studio();
+        let id = s.app.add_artwork("T".into(), "".into(), Kind::Algorithm, solid(4, 4), true);
+        let placard =
+            |artwork_id| Ok(AiOutput::Placard { artwork_id, placard: ai::Placard { title: "Label".into(), ..Default::default() } });
+        s.app.on_ai(event(placard(id + 100)));
+        assert!(s.app.artworks[0].placard.is_none());
+        s.app.on_ai(event(placard(id)));
+        assert_eq!(s.app.artworks[0].placard.as_ref().unwrap().title, "Label");
+    }
+
+    #[test]
+    fn results_for_a_parked_photo_wait_in_its_stack() {
+        let mut s = studio();
+        let first = s.with_photo("first.png");
+        s.app.job_photo.insert(77, first);
+        s.with_photo("second.png");
+        s.app.on_ai(event(Ok(painted("Dusk"))));
+        assert!(s.app.artworks.is_empty(), "not on the photo now on stage");
+        let session = s.app.tray.iter().find(|t| t.id == first).unwrap().session.as_ref().unwrap();
+        assert_eq!(session.artworks[0].title, "Dusk");
+    }
+
+    #[test]
+    fn plugin_scans_update_the_status_and_point_out_pending_approvals() {
+        let mut s = studio();
+        let root = photo_io::user_dir(None).join(format!("scan-{}", std::process::id()));
+        for name in ["a", "b"] {
+            std::fs::create_dir_all(root.join(name)).unwrap();
+            let toml = format!("protocol = 1\nid = \"pending-{name}\"\nname = \"{name}\"\nrun = [\"never\"]\n");
+            std::fs::write(root.join(name).join("plugin.toml"), toml).unwrap();
+        }
+        let location = plugins::external::Location { kind: plugins::external::LocationKind::Env, path: root.clone(), exists: true };
+        let builtin = plugins::Registry::builtin_ids();
+        let scan = plugins::external::scan_locations(vec![location], &builtin, &Default::default());
+        s.app.scanning_plugins = true;
+        s.app.style_id = "gone-style".into();
+        s.app.on_worker(WorkerMsg::PluginsScanned(Box::new(scan.clone())));
+        assert!(!s.app.scanning_plugins);
+        assert_eq!(s.app.style_id, "oil", "a style that left falls back to the first");
+        assert_eq!(s.toasts(), ["2 plug-ins need your approval: open Plug-ins to review"]);
+        assert_eq!(s.app.plugin_scan.as_ref().unwrap().found.len(), 2);
+
+        s.app.plugins_open = true;
+        s.app.on_plugins_scanned(scan);
+        assert_eq!(s.toasts().len(), 1, "no need to point it out with the panel open");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn toasts_fade_after_a_few_seconds() {
+        let mut s = studio();
+        s.app.toast("hello", crate::theme::GOLD);
+        s.frame();
+        s.frame();
+        assert!(s.shows("hello"));
+        s.app.toasts[0].born -= 10.0;
+        s.frame();
+        assert!(s.app.toasts.is_empty());
+    }
+
+    #[test]
+    fn file_origins_show_on_stage() {
+        let mut s = studio();
+        s.with_photo("p.png");
+        assert!(matches!(s.app.photo.as_ref().unwrap().asset.origin, Origin::File { .. }));
+        assert_eq!(s.app.photo.as_ref().unwrap().orig_size, [96, 64]);
+    }
 }

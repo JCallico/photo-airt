@@ -4,10 +4,20 @@ updates:
     directory: /
     schedule:
       interval: weekly
+      day: monday
+    labels: [dependencies, rust]
     groups:
       cargo-minor-and-patch:
         update-types: [minor, patch]
+      cargo-security:
+        applies-to: security-updates
+        patterns: ["*"]
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: weekly
+      day: monday
+    labels: [dependencies]
+    groups:
+      actions-minor-and-patch:
+        update-types: [minor, patch]

@@ -305,7 +305,7 @@ fn list_plugins() -> anyhow::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::marked_path;
+    use super::*;
 
     #[test]
     fn login_shell_path_ignores_profile_noise() {
@@ -313,5 +313,104 @@ mod tests {
         assert_eq!(marked_path(out), Some("/opt/homebrew/bin:/usr/bin"));
         assert_eq!(marked_path("no markers"), None);
         assert_eq!(marked_path("__PHOTO_AIRT_PATH__ __PHOTO_AIRT_PATH__"), None);
+    }
+
+    fn tmp(name: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!("photo-airt-cli-test-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    fn photo_in(dir: &std::path::Path) -> String {
+        let path = dir.join("photo.png");
+        image::RgbImage::from_fn(96, 64, |x, y| image::Rgb([(x * 2) as u8, (y * 3) as u8, 90])).save(&path).unwrap();
+        path.display().to_string()
+    }
+
+    fn strings(args: &[&str]) -> Vec<String> {
+        args.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn render_mode_writes_the_chosen_style_at_the_chosen_size() {
+        let dir = tmp("render");
+        let (input, out) = (photo_in(&dir), dir.join("out").join("deep"));
+        headless(&strings(&["halftone", &input, out.to_str().unwrap(), "48"])).unwrap();
+        let img = image::open(out.join("halftone.jpg")).unwrap();
+        assert_eq!((img.width(), img.height()), (48, 32));
+        assert_eq!(std::fs::read_dir(&out).unwrap().count(), 1, "only the chosen style");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn render_mode_can_add_a_time_lapse() {
+        let dir = tmp("render-timelapse");
+        let input = photo_in(&dir);
+        let out = dir.join("out");
+        headless(&strings(&["--timelapse", "pixel", &input, out.to_str().unwrap()])).unwrap();
+        assert!(out.join("pixel.jpg").is_file());
+        assert!(std::fs::read(out.join("pixel-timelapse.gif")).unwrap().starts_with(b"GIF"));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn render_mode_explains_bad_arguments() {
+        let dir = tmp("render-bad");
+        let input = photo_in(&dir);
+        let out = dir.join("out");
+        assert!(headless(&strings(&["oil"])).unwrap_err().to_string().contains("missing input"));
+        assert!(headless(&strings(&["nope", &input, out.to_str().unwrap()])).unwrap_err().to_string().contains("unknown style nope"));
+        assert!(headless(&strings(&["oil", "hello world"])).is_err(), "not a path or a link");
+        let gone = dir.join("gone.png");
+        assert!(headless(&strings(&["oil", gone.to_str().unwrap()])).unwrap_err().to_string().contains("was not found"));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// These stop before any job starts, so no CLI ever runs.
+    #[test]
+    fn ai_mode_rejects_bad_arguments_before_starting_a_job() {
+        let dir = tmp("ai");
+        let input = photo_in(&dir);
+        assert!(ai_cli(&strings(&["director"])).unwrap_err().to_string().contains("missing input"));
+        assert!(ai_cli(&strings(&["nope", &input])).unwrap_err().to_string().contains("unknown AI job nope"));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_built_in_style_renders_through_the_plugin_contract() {
+        let dir = tmp("run-plugin");
+        let input = dir.join("in.png");
+        let output = dir.join("out.png");
+        image::RgbImage::from_pixel(32, 24, image::Rgb([120, 80, 40])).save(&input).unwrap();
+        let request = dir.join("request.json");
+        let json = serde_json::json!({
+            "protocol": photo_airt_sdk::PROTOCOL, "plugin_id": "pixel", "input": input, "output": output,
+            "width": 32, "height": 24, "params": {}, "seed": 7, "scale": 0.02,
+        });
+        std::fs::write(&request, json.to_string()).unwrap();
+        run_builtin_plugin(&strings(&["pixel", "render", request.to_str().unwrap()])).unwrap();
+        let img = image::open(&output).unwrap();
+        assert_eq!((img.width(), img.height()), (32, 24));
+
+        assert!(run_builtin_plugin(&[]).unwrap_err().to_string().contains("usage"));
+        assert!(run_builtin_plugin(&strings(&["nope"])).unwrap_err().to_string().contains("unknown built-in style"));
+        assert!(run_builtin_plugin(&strings(&["pixel", "paint"])).unwrap_err().to_string().contains("usage"));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn check_plugin_mode_reports_folders_that_fail_the_contract() {
+        assert!(check_plugin(&[]).unwrap_err().to_string().contains("usage"));
+        let dir = tmp("check");
+        assert!(check_plugin(&strings(&[dir.join("gone").to_str().unwrap()])).is_err());
+        let err = check_plugin(&strings(&[dir.to_str().unwrap()])).unwrap_err().to_string();
+        assert!(err.contains("does not meet the contract"), "{err}");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn listing_plugins_needs_no_setup() {
+        list_plugins().unwrap();
     }
 }

@@ -122,3 +122,126 @@ impl Finish {
         Img { w, h, px }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A left-to-right grey ramp with a warm tint.
+    fn ramp(w: usize, h: usize) -> Img {
+        let mut img = Img::new(w, h, [0.0; 3]);
+        for y in 0..h {
+            for x in 0..w {
+                let v = x as f32 / (w - 1) as f32;
+                img.px[y * w + x] = [v, v * 0.8, v * 0.6];
+            }
+        }
+        img
+    }
+
+    fn mean(img: &Img, channel: usize) -> f32 {
+        img.px.iter().map(|c| c[channel]).sum::<f32>() / img.px.len() as f32
+    }
+
+    #[test]
+    fn the_default_finish_leaves_the_artwork_untouched() {
+        let img = ramp(32, 16);
+        assert!(Finish::default().is_identity());
+        assert!(Finish::default().apply(&img).px == img.px);
+        assert!(!Finish { glow: 0.1, ..Default::default() }.is_identity());
+    }
+
+    #[test]
+    fn sanitizing_clamps_each_field_to_its_range_and_drops_nonsense() {
+        let f = Finish {
+            exposure: 9.0,
+            contrast: -9.0,
+            saturation: f32::NAN,
+            warmth: f32::INFINITY,
+            vignette: -1.0,
+            grain: 2.0,
+            canvas: 0.5,
+            glow: f32::NEG_INFINITY,
+        }
+        .sanitized();
+        assert_eq!((f.exposure, f.contrast, f.saturation, f.warmth), (1.0, -1.0, 0.0, 0.0));
+        assert_eq!((f.vignette, f.grain, f.canvas, f.glow), (0.0, 1.0, 0.5, 0.0));
+    }
+
+    #[test]
+    fn each_field_has_a_label_and_a_range_holding_its_default() {
+        let mut f = Finish::default();
+        let fields = f.fields_mut();
+        assert_eq!(fields.len(), 8);
+        for (spec, value) in fields {
+            assert!(!spec.label.is_empty());
+            assert!((spec.min..=spec.max).contains(value), "{}", spec.label);
+        }
+    }
+
+    #[test]
+    fn recipes_may_name_only_some_fields() {
+        let f: Finish = serde_json::from_str(r#"{"grain": 0.4}"#).unwrap();
+        assert_eq!(f, Finish { grain: 0.4, ..Default::default() });
+    }
+
+    #[test]
+    fn exposure_contrast_saturation_and_warmth_do_what_they_say() {
+        let img = ramp(64, 8);
+        let base = mean(&img, 0);
+        assert!(mean(&Finish { exposure: 0.5, ..Default::default() }.apply(&img), 0) > base);
+        assert!(mean(&Finish { exposure: -0.5, ..Default::default() }.apply(&img), 0) < base);
+
+        let contrast = Finish { contrast: 1.0, ..Default::default() }.apply(&img);
+        assert!(contrast.at(5, 0)[0] < img.at(5, 0)[0] && contrast.at(58, 0)[0] > img.at(58, 0)[0]);
+
+        let grey = Finish { saturation: -1.0, ..Default::default() }.apply(&img);
+        assert!(grey.px.iter().all(|c| (c[0] - c[1]).abs() < 1e-4 && (c[1] - c[2]).abs() < 1e-4));
+
+        let warm = Finish { warmth: 1.0, ..Default::default() }.apply(&Img::new(8, 8, [0.5; 3]));
+        assert!(warm.at(0, 0)[0] > 0.5 && warm.at(0, 0)[2] < 0.5);
+    }
+
+    #[test]
+    fn the_vignette_darkens_corners_and_spares_the_centre() {
+        let img = Img::new(64, 64, [0.8; 3]);
+        let out = Finish { vignette: 1.0, ..Default::default() }.apply(&img);
+        assert!(out.at(0, 0)[0] < 0.4, "corner {}", out.at(0, 0)[0]);
+        assert!((out.at(32, 32)[0] - 0.8).abs() < 1e-4, "centre {}", out.at(32, 32)[0]);
+    }
+
+    #[test]
+    fn grain_and_canvas_add_repeatable_texture() {
+        let img = Img::new(48, 48, [0.5; 3]);
+        for f in [Finish { grain: 1.0, ..Default::default() }, Finish { canvas: 1.0, ..Default::default() }] {
+            let (a, b) = (f.apply(&img), f.apply(&img));
+            assert!(a.px == b.px, "the same finish must give the same picture");
+            assert!(a.px.iter().any(|c| (c[0] - 0.5).abs() > 0.01), "no visible texture");
+            assert!(a.px.iter().flatten().all(|v| (0.0..=1.0).contains(v)));
+        }
+    }
+
+    #[test]
+    fn glow_blooms_only_from_highlights() {
+        let mut bright = Img::new(64, 64, [0.5; 3]);
+        for y in 24..40 {
+            for x in 24..40 {
+                bright.px[y * 64 + x] = [1.0; 3];
+            }
+        }
+        let glow = Finish { glow: 1.0, ..Default::default() };
+        let out = glow.apply(&bright);
+        // One pixel outside the bright square, the light spills over.
+        assert!(out.at(23, 32)[0] > 0.505, "{}", out.at(23, 32)[0]);
+        assert!((out.at(4, 4)[0] - 0.5).abs() < 1e-3, "too far to reach");
+        let dim = Img::new(64, 64, [0.5; 3]);
+        assert!(glow.apply(&dim).px.iter().all(|c| (c[0] - 0.5).abs() < 1e-3), "nothing bright enough to bloom");
+    }
+
+    #[test]
+    fn a_finish_keeps_the_image_size() {
+        let f = Finish { exposure: 0.2, contrast: 0.2, saturation: 0.2, warmth: 0.2, vignette: 0.2, grain: 0.2, canvas: 0.2, glow: 0.2 };
+        let out = f.apply(&ramp(40, 20));
+        assert_eq!((out.w, out.h, out.px.len()), (40, 20, 800));
+    }
+}

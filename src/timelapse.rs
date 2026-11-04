@@ -220,4 +220,37 @@ mod tests {
         assert_eq!(*picked[9], 99);
         assert_eq!(pick_evenly(&v[..3], 10).len(), 3);
     }
+
+    #[test]
+    fn export_writes_a_numbered_gif_beside_earlier_ones() {
+        let dir = std::env::temp_dir().join(format!("photo-airt-timelapse-export-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let reg = crate::plugins::Registry::builtin();
+        let plugin = reg.get("halftone").unwrap();
+        let (photo, params) = (test_image(40, 30), Params::defaults(plugin.description()));
+        let export = || export(plugin.as_ref(), &photo, &params, 3, &Finish::default(), &dir, "my art").unwrap();
+        let (a, b) = (export(), export());
+        assert_eq!(a.file_name().unwrap(), "my-art-timelapse.gif");
+        assert_eq!(b.file_name().unwrap(), "my-art-timelapse-2.gif");
+        assert!(std::fs::read(&a).unwrap().starts_with(b"GIF"));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_gif_that_cannot_be_written_is_an_error() {
+        let photo = test_image(8, 8);
+        let stills = compose(&photo, &[], &photo, &Finish::default());
+        let path = std::env::temp_dir().join("photo-airt-no-such-folder").join("a.gif");
+        assert!(encode_gif(&stills, &path).unwrap_err().to_string().contains("creating"));
+    }
+
+    #[test]
+    fn a_cancelled_recording_is_reported() {
+        let reg = crate::plugins::Registry::builtin();
+        let plugin = reg.get("oil").unwrap();
+        let photo = test_image(40, 30);
+        let ctx = Ctx::for_image(&photo, 1);
+        ctx.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+        assert!(record(plugin.as_ref(), &photo, &Params::defaults(plugin.description()), ctx).is_err());
+    }
 }

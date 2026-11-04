@@ -1,0 +1,97 @@
+name: Coverage
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: coverage-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  coverage:
+    name: Coverage
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      CARGO_LLVM_COV_VERSION: 0.9.1
+      CARGO_LLVM_COV_SHA256: 3fca950394a3c49457657c158b1619cec8dfd2647ae5b48746734c0ab969a522
+      CODECOV_VERSION: v11.3.2
+      CODECOV_SHA256: 8e1bfb71661378530f6ea21e82b414095899e565cbb4cf555c613064be17b973
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install system libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libxkbcommon-dev libwayland-dev libx11-dev libgl1-mesa-dev
+
+      - name: Install Rust
+        run: |
+          rustup toolchain install stable --profile minimal --component llvm-tools-preview
+          rustup default stable
+
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target/llvm-cov-target
+          key: coverage-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: coverage-${{ runner.os }}-
+
+      - name: Install coverage tools (checksum verified)
+        working-directory: ${{ runner.temp }}
+        run: |
+          curl -fsSL -o llvm-cov.tar.gz "https://github.com/taiki-e/cargo-llvm-cov/releases/download/v${CARGO_LLVM_COV_VERSION}/cargo-llvm-cov-x86_64-unknown-linux-musl.tar.gz"
+          echo "${CARGO_LLVM_COV_SHA256}  llvm-cov.tar.gz" | sha256sum --check --strict
+          tar xzf llvm-cov.tar.gz
+          install -m 0755 cargo-llvm-cov "$HOME/.cargo/bin/cargo-llvm-cov"
+          curl -fsSL -o codecov "https://cli.codecov.io/${CODECOV_VERSION}/linux/codecov"
+          echo "${CODECOV_SHA256}  codecov" | sha256sum --check --strict
+          install -m 0755 codecov "$HOME/.cargo/bin/codecov"
+
+      - name: Measure workspace coverage
+        run: |
+          mkdir -p target/coverage
+          cargo llvm-cov --release --workspace --locked --lcov --output-path target/coverage/lcov.info
+
+      - name: Keep coverage report
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: coverage-lcov
+          path: target/coverage/lcov.info
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload coverage to Codecov
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+          COVERAGE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          COVERAGE_PR: ${{ github.event.pull_request.number }}
+        run: |
+          branch="$GITHUB_REF_NAME"
+          if [ -n "$COVERAGE_PR" ] && [ -z "$CODECOV_TOKEN" ]; then
+            # Public PR uploads use Codecov's unprotected-branch convention.
+            # This also works for forks and Dependabot without exposing secrets.
+            branch="pr${COVERAGE_PR}:${GITHUB_HEAD_REF}"
+          fi
+          if [ -z "$COVERAGE_PR" ] && [ -z "$CODECOV_TOKEN" ]; then
+            echo "::error::Add the CODECOV_TOKEN repository Actions secret before uploading coverage."
+            exit 1
+          fi
+          codecov upload-process --fail-on-error --disable-search \
+            --file target/coverage/lcov.info --slug "$GITHUB_REPOSITORY" \
+            --sha "$COVERAGE_SHA" --branch "$branch"

@@ -209,7 +209,7 @@ pub struct Prefs {
 
 impl Prefs {
     fn path() -> PathBuf {
-        dirs::config_dir().unwrap_or_else(std::env::temp_dir).join("photo-airt").join("prefs.json")
+        photo_io::user_dir(dirs::config_dir()).join("photo-airt").join("prefs.json")
     }
     pub fn load() -> Self {
         std::fs::read_to_string(Self::path()).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default()
@@ -315,6 +315,18 @@ pub struct Job {
 }
 
 impl Job {
+    /// A job that runs nothing, for testing how jobs are tracked and shown.
+    #[cfg(test)]
+    pub fn for_test(id: u64, title: &str, engine: Engine, status: JobStatus) -> Self {
+        let shared = JobShared { log: vec![], stage: String::new(), status, ended: None, child: None, cancelled: false };
+        Self { id, title: title.into(), engine, started: Instant::now(), shared: Arc::new(Mutex::new(shared)) }
+    }
+
+    #[cfg(test)]
+    pub fn cancelled_for_test(&self) -> bool {
+        self.shared.lock().unwrap().cancelled
+    }
+
     pub fn cancel(&self) {
         let mut s = self.shared.lock().unwrap();
         s.cancelled = true;
@@ -1059,5 +1071,146 @@ mod tests {
         assert_eq!(extract_json("Sure! ```json\n{\"a\":1}\n```").unwrap(), "{\"a\":1}");
         assert_eq!(extract_svg("here: <svg x='1'><rect/></svg> done").unwrap(), "<svg x='1'><rect/></svg>");
         assert!(extract_svg("<svg><rect/>").is_err());
+    }
+
+    #[test]
+    fn roles_explain_why_a_cli_cannot_fill_them() {
+        assert_eq!(Role::Director.eligible(Cli::Claude, None).unwrap_err(), "still detecting…");
+        let missing = CliStatus::default();
+        assert!(Role::Director.eligible(Cli::Codex, Some(&missing)).unwrap_err().contains("`codex`"));
+        let text_only = found(false, &[]);
+        assert!(Role::Painter.eligible(Cli::Codex, Some(&text_only)).unwrap_err().contains("image_generation"));
+        assert!(Role::Director.eligible(Cli::Codex, Some(&text_only)).is_ok(), "the Director needs no image model");
+        assert!(Role::Painter.eligible(Cli::Claude, Some(&text_only)).is_ok(), "Claude paints in SVG");
+        assert_eq!((Role::Director.label(), Role::Painter.label()), ("Art Director", "Master Painter"));
+    }
+
+    #[test]
+    fn no_role_is_assigned_while_clis_are_still_being_detected() {
+        assert_eq!(Prefs::default().resolve(Role::Director, None, None), None);
+        let painter = RoleCfg { cli: Cli::Claude, model: String::new() };
+        let prefs = Prefs { painter: Some(painter.clone()), ..Default::default() };
+        assert_eq!(prefs.resolve(Role::Painter, Some(&found(false, &[])), None), Some(painter));
+    }
+
+    #[test]
+    fn role_assignments_describe_themselves() {
+        let opus = RoleCfg { cli: Cli::Claude, model: "opus".into() };
+        let default = RoleCfg { cli: Cli::Codex, model: String::new() };
+        assert_eq!((opus.describe(), default.describe()), ("Claude · opus".to_string(), "Codex · default".to_string()));
+        assert_eq!((opus.engine(), default.engine()), (Engine::Claude, Engine::Codex));
+        assert_eq!(RoleCfg::health_key_for(Cli::Claude, "opus"), "claude:opus");
+        assert_eq!(RoleCfg::health_key_for(Cli::Codex, ""), "codex:default");
+        assert_eq!(Cli::ALL.map(Cli::name), ["Claude", "Codex"]);
+    }
+
+    /// `prefs.json` is a public format: files from earlier versions keep loading.
+    #[test]
+    fn prefs_files_keep_their_format() {
+        let prefs: Prefs =
+            serde_json::from_str(r#"{"director": {"cli": "Codex", "model": "gpt-x"}, "painter": {"cli": "Claude"}}"#).unwrap();
+        assert_eq!(prefs.director, Some(RoleCfg { cli: Cli::Codex, model: "gpt-x".into() }));
+        assert_eq!(prefs.painter, Some(RoleCfg { cli: Cli::Claude, model: String::new() }));
+        assert!(prefs.unavailable.is_empty());
+        let json = serde_json::to_value(&prefs).unwrap();
+        assert_eq!(json["director"]["cli"], "Codex");
+        assert!(json["unavailable"].is_object());
+    }
+
+    #[test]
+    fn model_problems_are_summarised_briefly() {
+        for text in ["Model not found: x", "INVALID MODEL", "you do not have access to this", "The model is not available"] {
+            assert!(model_problem(text).is_some(), "{text}");
+        }
+        assert_eq!(model_problem(&format!("unknown model {}", "x".repeat(200))).unwrap().chars().count(), 90);
+        assert_eq!(model_problem("Unknown model zed.\nSee the docs").as_deref(), Some("Unknown model zed"));
+    }
+
+    #[test]
+    fn only_marked_errors_parse_as_model_errors() {
+        assert_eq!(parse_model_error("network down"), None);
+        assert_eq!(parse_model_error(MODEL_ERR), None, "no key");
+        assert_eq!(parse_model_error(&format!("{MODEL_ERR}[claude:fable")), None, "unterminated key");
+        assert_eq!(parse_model_error(&format!("{MODEL_ERR}[a:b]")), Some(("a:b".into(), String::new())));
+    }
+
+    #[test]
+    fn director_reports_accept_the_older_codex_field_names() {
+        let r: DirectorReport =
+            serde_json::from_str(r#"{"title": "T", "reading": "R", "codex_prompt": "paint", "codex_medium": "oil"}"#).unwrap();
+        assert_eq!((r.paint_prompt.as_str(), r.paint_medium.as_str()), ("paint", "oil"));
+        assert!(r.recipes.is_empty() && r.palette.is_empty());
+        let recipe: Recipe = serde_json::from_str(r#"{"name": "N", "style": "oil", "finish": {"glow": 0.5}}"#).unwrap();
+        assert_eq!(recipe.finish.glow, 0.5);
+        let placard: Placard = serde_json::from_str(r#"{"title": "T"}"#).unwrap();
+        assert_eq!((placard.title.as_str(), placard.year.as_str()), ("T", ""));
+    }
+
+    #[test]
+    fn replies_without_the_expected_payload_are_errors_that_quote_them() {
+        let err = extract_json("sorry, I cannot do that").unwrap_err().to_string();
+        assert!(err.contains("no JSON") && err.contains("sorry"), "{err}");
+        assert!(extract_json("{ cut off").is_err());
+        assert!(extract_svg("no drawing here").unwrap_err().to_string().contains("no <svg>"));
+        assert!(extract_svg("<svg>").unwrap_err().to_string().contains("cut off"));
+    }
+
+    #[test]
+    fn truncation_flattens_lines_and_counts_characters() {
+        assert_eq!(truncate("a\nb", 10), "a b");
+        assert_eq!(truncate("ééééé", 2), "éé…");
+        assert_eq!(truncate("exact", 5), "exact");
+    }
+
+    #[test]
+    fn svg_replies_rasterise_at_the_requested_size_on_white() {
+        let svg = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><rect x="0" y="0" width="5" height="10" fill="#ff0000"/></svg>"##;
+        let img = rasterise_svg(svg, 40, 20).unwrap();
+        assert_eq!((img.width(), img.height()), (40, 20));
+        assert_eq!(img.get_pixel(5, 10).0, [255, 0, 0]);
+        assert_eq!(img.get_pixel(35, 10).0, [255, 255, 255], "unpainted paper stays white");
+        assert!(rasterise_svg("<svg", 10, 10).is_err());
+        assert!(rasterise_svg(svg, 0, 10).is_err());
+    }
+
+    #[test]
+    fn only_a_downscaled_copy_of_the_photo_is_handed_to_a_model() {
+        let dir = std::env::temp_dir().join(format!("photo-airt-ai-input-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = write_input(&Img::new(3000, 1500, [0.5; 3]), &dir, "input.png").unwrap();
+        let written = image::open(&path).unwrap();
+        assert_eq!((written.width(), written.height()), (1536, 768));
+        assert!(write_input(&Img::new(8, 8, [0.5; 3]), &dir.join("missing"), "input.png").is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn each_cli_is_pointed_at_the_image_its_own_way() {
+        let path = Path::new("input.png");
+        assert!(look_at(&RoleCfg { cli: Cli::Claude, model: String::new() }, path).starts_with("Read the image file"));
+        assert!(look_at(&RoleCfg { cli: Cli::Codex, model: String::new() }, path).starts_with("Study the attached image"));
+    }
+
+    #[test]
+    fn jobs_log_their_stages_and_can_be_cancelled_before_a_process_starts() {
+        let job = Job::for_test(1, "Art direction", Engine::Claude, JobStatus::Running);
+        let ctx = egui::Context::default();
+        stage(&job.shared, &ctx, "Reading the photo");
+        log(&job.shared, &ctx, "hello".into());
+        {
+            let s = job.shared.lock().unwrap();
+            assert_eq!(s.stage, "Reading the photo");
+            assert_eq!(s.log, ["▸ Reading the photo", "hello"]);
+        }
+        job.cancel();
+        assert!(job.shared.lock().unwrap().cancelled);
+    }
+
+    #[test]
+    fn the_paint_presets_and_vector_styles_are_complete() {
+        assert!(!PAINT_PRESETS.is_empty() && !VECTOR_STYLES.is_empty());
+        assert!(PAINT_PRESETS.iter().all(|p| !p.name.is_empty() && !p.prompt.is_empty()));
+        assert!(VECTOR_STYLES.iter().all(|v| !v.name.is_empty() && !v.brief.is_empty()));
     }
 }

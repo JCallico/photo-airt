@@ -177,3 +177,85 @@ impl App {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::app::test_support::*;
+    use crate::plugins::external::{Location, LocationKind, Trust, scan_locations};
+
+    fn folder(name: &str, plugins: &[(&str, &str)]) -> std::path::PathBuf {
+        let root = crate::photo_io::user_dir(None).join(format!("panel-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        for (dir, text) in plugins {
+            std::fs::create_dir_all(root.join(dir)).unwrap();
+            std::fs::write(root.join(dir).join("plugin.toml"), text).unwrap();
+        }
+        root
+    }
+
+    fn manifest(id: &str) -> String {
+        format!("protocol = 1\nid = \"{id}\"\nname = \"Plugin {id}\"\nblurb = \"Blurb of {id}\"\nauthor = \"Someone\"\nrun = [\"never\"]\n")
+    }
+
+    #[test]
+    fn the_panel_lists_locations_and_every_plugin_status() {
+        let root = folder(
+            "statuses",
+            &[
+                ("a", &manifest("wants-approval")),
+                ("b", "name = \"Broken\"\nrun = [\"x\"]\n"),
+                ("c", &manifest("oil")),
+                ("d", &manifest("approved")),
+                ("e", &manifest("changed")),
+                ("f", &manifest("wants-approval")),
+            ],
+        );
+        let location = Location { kind: LocationKind::User, path: root.clone(), exists: true };
+        let missing = Location { kind: LocationKind::Portable, path: root.join("nowhere"), exists: false };
+        let first = scan_locations(vec![location.clone()], &["oil".into()], &Trust::default());
+        let mut trust = Trust::default();
+        for f in first.found.iter().filter(|f| f.dir.ends_with("d") || f.dir.ends_with("e")) {
+            trust.approve(&f.dir, f.checksum.as_deref().unwrap());
+        }
+        std::fs::write(root.join("e").join("new.txt"), "changed").unwrap();
+        let scan = scan_locations(vec![location, missing], &["oil".into()], &trust);
+
+        let mut s = studio();
+        s.app.plugin_scan = Some(scan);
+        s.app.plugins_open = true;
+        s.size = [1600.0, 1400.0];
+        s.frame();
+        s.frame();
+        for text in ["Plug-ins", "⟳ Rescan", "Your plug-ins folder", "Next to the app", "Plugin wants-approval", "Approve"] {
+            assert!(s.shows(text), "no “{text}” in {:?}", s.labels());
+        }
+        assert!(s.shows("Plug-ins · 2"), "the bar counts what needs approval: {:?}", s.labels());
+        s.app.plugin_scan.as_mut().unwrap().found.retain(|f| f.dir.ends_with("d"));
+        s.frame();
+        s.frame();
+        assert!(s.shows("Plugin approved") && s.shows("Revoke"), "{:?}", s.labels());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn the_panel_has_something_to_say_with_no_plugins() {
+        let mut s = studio();
+        s.app.plugins_open = true;
+        s.frame();
+        s.frame();
+        assert!(s.shows("Extra painting styles"), "{:?}", s.labels());
+        s.app.scanning_plugins = true;
+        s.frame();
+        assert!(s.shows("Scanning…"), "{:?}", s.labels());
+    }
+
+    #[test]
+    fn escape_closes_the_panel() {
+        let mut s = studio();
+        s.app.plugins_open = true;
+        s.frame();
+        s.press(egui::Key::Escape, egui::Modifiers::NONE);
+        s.frame();
+        assert!(!s.app.plugins_open);
+    }
+}

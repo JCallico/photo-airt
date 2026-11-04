@@ -819,4 +819,236 @@ mod tests {
         }
         assert_eq!(r.items.len(), MAX_RECENTS);
     }
+
+    fn web(page: Option<&str>) -> Origin {
+        Origin::Web { url: "https://cdn.example.com/a.jpg".into(), page: page.map(str::to_string) }
+    }
+
+    #[test]
+    fn origins_describe_themselves_for_labels_and_tooltips() {
+        let file = Origin::File { path: "/tmp/a.jpg".into() };
+        assert_eq!(
+            (file.label(), file.credit(), file.after_credit()),
+            ("Local file".into(), "From a local photograph".into(), "After a photograph".into())
+        );
+        assert_eq!(file.location(), Path::new("/tmp/a.jpg").display().to_string());
+
+        let page = web(Some("https://www.photos.example.org/p/1"));
+        assert_eq!(page.label(), "photos.example.org", "credits the page and drops www");
+        assert_eq!(page.credit(), "From photos.example.org");
+        assert_eq!(page.after_credit(), "After a photograph from photos.example.org");
+        assert_eq!(page.location(), "https://www.photos.example.org/p/1\nimage: https://cdn.example.com/a.jpg");
+        assert_eq!(web(None).label(), "cdn.example.com");
+        assert_eq!(web(None).location(), "https://cdn.example.com/a.jpg");
+
+        let clip = Origin::Clipboard;
+        assert_eq!(
+            (clip.label(), clip.credit(), clip.after_credit()),
+            ("Clipboard".into(), "Pasted from the clipboard".into(), "After a pasted photograph".into())
+        );
+        assert_eq!(clip.location(), "Pasted from the clipboard");
+
+        let icons = [file.icon(), page.icon(), clip.icon()];
+        assert!(icons[0] != icons[1] && icons[1] != icons[2]);
+    }
+
+    #[test]
+    fn describing_an_input_previews_what_will_open() {
+        let dir = tmp_dir("describe");
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("a.png");
+        std::fs::write(&file, png_bytes()).unwrap();
+        assert_eq!(describe(&Input::File(file)), ("Local file".to_string(), "a.png".to_string()));
+        assert_eq!(describe(&Input::File(dir.join("gone.png"))).0, "File not found");
+        let link = |u: &str| Input::Link(Url::parse(u).unwrap());
+        assert_eq!(describe(&link("https://example.com/a.JPG")), ("Image link".to_string(), "example.com".to_string()));
+        assert!(describe(&link("https://example.com/gallery")).0.contains("preview image"));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn local_files_become_assets_and_problems_are_explained() {
+        let dir = tmp_dir("local");
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("My Photo.png");
+        std::fs::write(&file, png_bytes()).unwrap();
+        let a = local_asset(&file).unwrap();
+        assert_eq!(a.name, "My Photo.png");
+        assert!(a.local.is_absolute() && matches!(&a.origin, Origin::File { path } if *path == a.local));
+        assert!(local_asset(&dir.join("gone.png")).unwrap_err().to_string().contains("was not found"));
+        assert!(local_asset(&dir).unwrap_err().to_string().contains("is not a file"));
+        let acquired = acquire(&Input::File(file), &mut |_| {}, &AtomicBool::new(false)).unwrap();
+        assert_eq!(acquired, a);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn home_relative_and_windows_paths_are_recognised() {
+        let home = dirs::home_dir().unwrap();
+        assert_eq!(classify("~/Pictures/a.jpg"), Ok(Input::File(home.join("Pictures/a.jpg"))));
+        assert_eq!(classify(r"C:\Users\me\a.jpg"), Ok(Input::File(r"C:\Users\me\a.jpg".into())));
+        assert_eq!(classify("C:/Users/me/a.jpg"), Ok(Input::File("C:/Users/me/a.jpg".into())));
+    }
+
+    #[test]
+    fn pasted_images_are_saved_with_their_alpha_dropped() {
+        let dir = tmp_dir("clip");
+        let rgba = [255, 0, 0, 255].repeat(4);
+        let a = clipboard_asset(2, 2, &rgba, &dir).unwrap();
+        assert_eq!((a.name.as_str(), &a.origin), ("Pasted image", &Origin::Clipboard));
+        assert_eq!(image::open(&a.local).unwrap().to_rgb8().get_pixel(1, 1).0, [255, 0, 0]);
+        assert!(clipboard_asset(9, 9, &rgba, &dir).unwrap_err().to_string().contains("malformed"), "wrong buffer size");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn every_supported_format_is_sniffed_from_its_magic_bytes() {
+        assert_eq!(sniff_image(&[0xFF, 0xD8, 0xFF, 0xE0, 0, 0, 0, 0]), Some("jpg"));
+        assert_eq!(sniff_image(b"\x89PNG\r\n\x1a\n...."), Some("png"));
+        assert_eq!(sniff_image(b"RIFF\0\0\0\0WEBPVP8 "), Some("webp"));
+        assert_eq!(sniff_image(b"GIF89a......"), Some("gif"));
+        assert_eq!(sniff_image(b"II*\0........"), Some("tiff"));
+        assert_eq!(sniff_image(b"BM.........."), Some("bmp"));
+        assert_eq!(sniff_image(b"\0\0\0\x18ftypavif\0\0\0\0"), Some("avif"));
+        assert_eq!(sniff_image(b"\0\0\0\x18ftypisom\0\0\0\0"), None, "a video is not a photo");
+        assert_eq!(sniff_image(b""), None);
+    }
+
+    #[test]
+    fn page_scanning_copes_with_sloppy_html() {
+        let base = Url::parse("https://example.com/gallery/page.html").unwrap();
+        let find = |html: &str| preview_image(html, &base).map(|u| u.to_string());
+        assert_eq!(find("<META PROPERTY=og:image CONTENT=/a.jpg>").as_deref(), Some("https://example.com/a.jpg"));
+        assert_eq!(find("<meta property = 'og:image' content = 'b.jpg' />").as_deref(), Some("https://example.com/gallery/b.jpg"));
+        assert_eq!(
+            find(r#"<meta name="twitter:image" content="https://x.example/c.jpg?a=1&amp;b=2">"#).as_deref(),
+            Some("https://x.example/c.jpg?a=1&b=2")
+        );
+        assert_eq!(
+            find(r#"<meta name="twitter:image" content="t.jpg"><meta property="og:image" content="o.jpg">"#).as_deref(),
+            Some("https://example.com/gallery/o.jpg"),
+            "Open Graph wins"
+        );
+        assert_eq!(find(r#"<link rel="IMAGE_SRC" href="/l.png">"#).as_deref(), Some("https://example.com/l.png"));
+        assert_eq!(find(r#"<metadata property="og:image" content="no.jpg">"#), None, "a different tag");
+        assert_eq!(find(r#"<meta property="og:image" content="   ">"#), None, "blank");
+        assert_eq!(find(r#"<meta property="og:image" content="ftp://x.example/a.jpg">"#), None, "not the web");
+        assert_eq!(find("<meta property=\"og:image\" content=\"cut-off.jpg\""), None, "unterminated tag");
+
+        assert_eq!(page_title("<title>  A \n  Title &amp; More </title>").as_deref(), Some("A Title & More"));
+        assert_eq!(page_title(r#"<title>Plain</title><meta property="og:title" content="Rich">"#).as_deref(), Some("Rich"));
+        assert_eq!(page_title("<title>   </title>"), None);
+        assert_eq!(page_title("<title>never closed"), None);
+        assert_eq!(page_title("no title").as_deref(), None);
+    }
+
+    #[test]
+    fn links_that_lead_nowhere_are_explained() {
+        let fetch = |base: String, path: &str, name: &str| {
+            let f = Fetcher::with_policy(true, MAX_DOWNLOAD, tmp_dir(name));
+            f.fetch(&Url::parse(&format!("{base}{path}")).unwrap(), &mut |_| {}, &AtomicBool::new(false)).unwrap_err().to_string()
+        };
+        let err = fetch(serve(vec![("application/zip", b"PK\x03\x04 not a photo".to_vec())]), "/a.zip", "zip");
+        assert!(err.contains("not an image") && err.contains("application/zip"), "{err}");
+
+        let err = fetch(serve(vec![("text/html", b"<html><title>Empty</title></html>".to_vec())]), "/page", "bare-page");
+        assert!(err.contains("no preview image"), "{err}");
+
+        let listener_base = serve(vec![]);
+        let page = format!(r#"<html><meta property="og:image" content="{listener_base}/fake.png"></html>"#);
+        let fake = serve(vec![("text/html", b"still not an image".to_vec())]);
+        let page = page.replace(&listener_base, &fake);
+        let err = fetch(serve(vec![("text/html", page.into_bytes())]), "/page", "fake-preview");
+        assert!(err.contains("preview image is not a supported image"), "{err}");
+
+        let strict = Fetcher::with_policy(false, MAX_DOWNLOAD, tmp_dir("scheme"));
+        let err = strict.fetch(&Url::parse("ftp://example.com/a.png").unwrap(), &mut |_| {}, &AtomicBool::new(false)).unwrap_err();
+        assert!(err.to_string().contains("links are not supported"), "{err}");
+    }
+
+    fn recent_asset(name: &str, origin: Origin) -> Asset {
+        Asset { local: format!("/tmp/{name}").into(), name: name.into(), origin }
+    }
+
+    #[test]
+    fn recents_keep_the_newest_first_without_duplicates_up_to_a_limit() {
+        let mut r = Recents::default();
+        let file = |n: &str| recent_asset(n, Origin::File { path: format!("/tmp/{n}").into() });
+        r.push(file("a"), "a.jpg".into());
+        r.push(file("b"), "b.jpg".into());
+        r.push(file("a"), "a2.jpg".into());
+        let names: Vec<&str> = r.items.iter().map(|i| i.asset.name.as_str()).collect();
+        assert_eq!(names, ["a", "b"]);
+        assert_eq!(r.items[0].thumb, PathBuf::from("a2.jpg"));
+
+        // The same page is one recent, whichever image it pointed at; pastes are all distinct.
+        let page =
+            |n: &str| recent_asset(n, Origin::Web { url: format!("https://x.example/{n}"), page: Some("https://x.example/p".into()) });
+        r.push(page("p1"), "t".into());
+        r.push(page("p2"), "t".into());
+        r.push(recent_asset("c1", Origin::Clipboard), "t".into());
+        r.push(recent_asset("c2", Origin::Clipboard), "t".into());
+        assert_eq!(r.items.len(), 5);
+
+        r.remove(Path::new("/tmp/c1"));
+        assert!(r.items.iter().all(|i| i.asset.name != "c1"));
+
+        for i in 0..MAX_RECENTS + 5 {
+            r.push(file(&format!("n{i}")), "t".into());
+        }
+        assert_eq!(r.items.len(), MAX_RECENTS);
+    }
+
+    #[test]
+    fn recents_reopen_from_the_cached_copy_or_their_origin() {
+        let dir = tmp_dir("reopen");
+        std::fs::create_dir_all(&dir).unwrap();
+        let cached = dir.join("cached.png");
+        std::fs::write(&cached, png_bytes()).unwrap();
+        let recent =
+            |local: &Path, origin| Recent { asset: Asset { local: local.into(), name: "n".into(), origin }, thumb: "t".into(), opened: 0 };
+
+        assert_eq!(Recents::reopen_input(&recent(&cached, Origin::Clipboard)), Ok(Input::File(cached.clone())));
+        let gone = dir.join("gone.png");
+        let link = Recents::reopen_input(&recent(&gone, web(Some("https://x.example/page")))).unwrap();
+        assert!(matches!(link, Input::Link(u) if u.as_str() == "https://x.example/page"));
+        assert!(matches!(Recents::reopen_input(&recent(&gone, web(None))), Ok(Input::Link(u)) if u.host_str() == Some("cdn.example.com")));
+        let bad = Origin::Web { url: "not a url".into(), page: None };
+        assert_eq!(Recents::reopen_input(&recent(&gone, bad)).unwrap_err(), "Invalid saved link");
+        assert!(Recents::reopen_input(&recent(&gone, Origin::File { path: gone.clone() })).unwrap_err().contains("moved or deleted"));
+        assert!(Recents::reopen_input(&recent(&gone, Origin::Clipboard)).unwrap_err().contains("no longer cached"));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// `recents.json` is a public format: files from earlier versions keep loading.
+    #[test]
+    fn recents_files_keep_their_format() {
+        let json = r#"{"items": [{"asset": {"local": "/c/a.png", "name": "a", "origin": {"kind": "web", "url": "https://x.example/a.png", "page": null}}, "thumb": "/c/t.jpg", "opened": 5},
+            {"asset": {"local": "/c/b.png", "name": "b", "origin": {"kind": "clipboard"}}, "thumb": "/c/u.jpg", "opened": 6},
+            {"asset": {"local": "/c/d.png", "name": "d", "origin": {"kind": "file", "path": "/c/d.png"}}, "thumb": "/c/v.jpg", "opened": 7}]}"#;
+        let r: Recents = serde_json::from_str(json).unwrap();
+        assert_eq!(r.items.len(), 3);
+        assert_eq!(r.items[1].asset.origin, Origin::Clipboard);
+        assert_eq!(serde_json::to_value(&r).unwrap()["items"][0]["asset"]["origin"]["kind"], "web");
+    }
+
+    #[test]
+    fn thumbnails_are_named_after_the_photos_identity() {
+        let a = recent_asset("a", Origin::File { path: "/tmp/a".into() });
+        let b = recent_asset("b", Origin::File { path: "/tmp/b".into() });
+        assert_eq!(Recents::thumb_path(&a), Recents::thumb_path(&a));
+        assert_ne!(Recents::thumb_path(&a), Recents::thumb_path(&b));
+        assert!(Recents::thumb_path(&a).starts_with(Recents::thumb_dir()));
+        assert!(sources_dir().starts_with(photo_io::cache_dir()));
+    }
+
+    #[test]
+    fn ages_read_naturally() {
+        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+        assert_eq!(ago(now), "just now");
+        assert_eq!(ago(now + 100), "just now", "a clock that moved back");
+        assert_eq!(ago(now - 120), "2 min ago");
+        assert_eq!(ago(now - 7200), "2 h ago");
+        assert_eq!(ago(now - 3 * 86_400), "3 days ago");
+    }
 }

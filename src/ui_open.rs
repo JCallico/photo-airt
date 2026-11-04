@@ -484,3 +484,164 @@ impl App {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app::test_support::*;
+    use crate::app_open::ClipStatus;
+
+    #[test]
+    fn sizes_read_as_kilobytes_then_megabytes() {
+        assert_eq!(mb(2048), "2 KB");
+        assert_eq!(mb(1_572_864), "1.5 MB");
+    }
+
+    #[test]
+    fn covering_handles_an_empty_texture() {
+        let uv = cover_uv([200, 100], 100.0, 100.0);
+        assert_eq!((uv.min.x, uv.max.x), (0.25, 0.75));
+        let tall = cover_uv([100, 200], 100.0, 100.0);
+        assert_eq!((tall.min.y, tall.max.y), (0.25, 0.75));
+        assert!(cover_uv([0, 0], 10.0, 10.0).is_finite());
+    }
+
+    fn sheet() -> Studio {
+        let mut s = studio();
+        s.app.open_sheet.visible = true;
+        s.app.open_sheet.focus = true;
+        s.frame();
+        s.frame();
+        s
+    }
+
+    #[test]
+    fn the_open_sheet_offers_a_paste_tip() {
+        let s = sheet();
+        assert!(s.shows("Tip: Ctrl+V a link"), "{:?}", s.labels());
+    }
+
+    #[test]
+    fn the_open_sheet_says_what_it_understood() {
+        let mut s = sheet();
+        let photo = photo_asset("typed.png");
+        for (input, expect) in [
+            (photo.local.display().to_string(), "typed.png"),
+            ("/no/such/file.png".to_string(), "File not found"),
+            ("https://example.com/a.jpg".to_string(), "Image link"),
+            ("https://example.com/gallery".to_string(), "preview image"),
+        ] {
+            s.app.open_sheet.input = input;
+            s.frame();
+            s.frame();
+            assert!(s.shows(expect), "no “{expect}” in {:?}", s.labels());
+        }
+    }
+
+    #[test]
+    fn the_open_button_opens_what_was_typed() {
+        let mut s = sheet();
+        let photo = photo_asset("typed.png");
+        s.app.open_sheet.input = photo.local.display().to_string();
+        s.frame();
+        s.frame();
+        s.click("Open");
+        assert!(!s.app.open_sheet.visible, "{:?}", s.labels());
+        s.until("the photo", |a| a.photo.is_some() && a.loading.is_none());
+        assert_eq!(s.app.photo.as_ref().unwrap().name, "typed.png");
+    }
+
+    #[test]
+    fn the_clipboard_is_offered_when_it_holds_something_usable() {
+        let mut s = sheet();
+        s.app.open_sheet.clip = ClipStatus::Image { width: 640, height: 480, preview: egui::ColorImage::filled([4, 3], Color32::RED) };
+        s.frame();
+        s.frame();
+        assert!(s.shows("640 × 480"), "{:?}", s.labels());
+
+        s.app.open_sheet.clip = ClipStatus::Text("https://example.com/a.jpg".into());
+        s.app.open_sheet.clip_tex = None;
+        s.frame();
+        s.frame();
+        assert_eq!(s.app.open_sheet.input, "https://example.com/a.jpg", "a link on the clipboard fills the bar");
+        assert!(s.app.open_sheet.prefilled);
+
+        let mut s = sheet();
+        s.app.open_sheet.clip = ClipStatus::Text("just some words".into());
+        s.frame();
+        assert!(s.app.open_sheet.input.is_empty(), "other text does not");
+
+        for clip in [ClipStatus::Empty, ClipStatus::Unavailable("no clipboard here".into())] {
+            s.app.open_sheet.clip = clip;
+            s.frame();
+            s.frame();
+        }
+    }
+
+    #[test]
+    fn recent_photos_are_listed_and_reopen_on_click() {
+        let mut s = sheet();
+        let photo = photo_asset("recent-one.png");
+        s.app.recents.push(photo.clone(), photo.local.clone());
+        s.frame();
+        s.frame();
+        assert!(s.shows("recent-one.png"), "{:?}", s.labels());
+        s.click("recent-one.png");
+        s.until("the photo", |a| a.photo.is_some() && a.loading.is_none());
+    }
+
+    #[test]
+    fn escape_closes_the_sheet() {
+        let mut s = sheet();
+        s.press(egui::Key::Escape, egui::Modifiers::NONE);
+        s.frame();
+        assert!(!s.app.open_sheet.visible);
+    }
+
+    #[test]
+    fn the_contact_sheet_lists_photos_and_filters_them() {
+        let mut s = studio();
+        let first = s.with_photo("first.png");
+        s.with_photo("second.png");
+        s.app.overview.visible = true;
+        s.frame();
+        s.frame();
+        assert!(s.shows("first.png") && s.shows("second.png"), "{:?}", s.labels());
+        s.app.overview.filter = "seco".into();
+        s.frame();
+        s.frame();
+        assert!(
+            s.texts.iter().filter(|(text, _)| text == "second.png").count() == 2
+                && s.texts.iter().filter(|(text, _)| text == "first.png").count() == 1,
+            "{:?}",
+            s.labels()
+        );
+        s.app.overview.filter.clear();
+        s.frame();
+        s.frame();
+        s.click("first.png");
+        assert_eq!(s.app.current, Some(first));
+        assert!(!s.app.overview.visible);
+    }
+
+    #[test]
+    fn the_progress_pill_shows_download_progress_and_can_cancel() {
+        let mut s = studio();
+        s.with_photo("p.png");
+        let cancel: std::sync::Arc<std::sync::atomic::AtomicBool> = Default::default();
+        s.app.loading = Some(crate::app::LoadState {
+            batch: 99,
+            label: "big.png".into(),
+            stage: "Downloading".into(),
+            done: 2 * 1_048_576,
+            total: Some(4 * 1_048_576),
+            cancel: cancel.clone(),
+        });
+        s.frame();
+        s.frame();
+        assert!(s.shows("2.0 MB") || s.shows("Downloading"), "{:?}", s.labels());
+        s.click("Cancel");
+        assert!(cancel.load(std::sync::atomic::Ordering::Relaxed));
+        assert!(s.app.loading.is_none());
+    }
+}
